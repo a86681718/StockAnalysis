@@ -1,0 +1,1 @@
+/usr/bin/google-chrome-stable --no-sandbox --window-size=1280,800 --window-position=0,0 --app https://www.tpex.org.tw/web/stock/aftertrading/broker_trading/brokerBS.php?l=zh-tw --incognito >> /dev/null 2>&1 &
