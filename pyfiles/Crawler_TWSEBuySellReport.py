@@ -3,8 +3,10 @@
 import os
 import cv2
 import shutil
+import logging
 import requests
 import operator
+import traceback
 import collections
 import numpy as np
 import pandas as pd
@@ -16,7 +18,13 @@ from time import sleep, time
 from random import randint
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
-'''
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.info('Start time: {}'.format(datetime.now()))
+start = time()
+
+''' 
+# this version of getStockList only includes stocks but not warrants
 def getStockList(url):
     df = pd.read_html(url,encoding='big5hkscs',header=0)[0]
     raw_list = df['有價證券代號及名稱']
@@ -27,6 +35,7 @@ def getStockList(url):
             code_list.append(code)
     return code_list
 '''
+
 def getStockList(url):
     df = pd.read_html(url,encoding='big5hkscs',header=0)[0]
     stock_list = []
@@ -59,16 +68,15 @@ def mse(imageA, imageB):
     err /= float(imageA.shape[0] * imageA.shape[1])
     return err
 
-def get_mse_tuples(pic):
+def getMseTuples(pic):
     mse_dict = {}
     for alphabet in alphabet_dict:
         mse_dict[alphabet] = mse(alphabet_dict[alphabet], pic)
     sorted_mse = sorted(mse_dict.items(), key=operator.itemgetter(1))
     return sorted_mse
 
-def captcha_solver(img_path):
+def captchaSolver(img_path):
     image = cv2.imread(img_path)
-    # plt.imshow(image)
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     ret, threshold = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
     kernel = np.ones((2,2), np.uint16)
@@ -109,7 +117,7 @@ def captcha_solver(img_path):
         edged = cv2.Canny(res, 100, 200)
         res = cv2.dilate(edged, kernel, iterations=2)
         
-        mse_dict = get_mse_tuples(res)
+        mse_dict = getMseTuples(res)
         first = mse_dict[0]
         second = mse_dict[1]
         if second[1]-first[1] <= 1000:
@@ -120,17 +128,16 @@ def captcha_solver(img_path):
         result += first[0]
     return result
 
-centralized_page = 'http://isin.twse.com.tw/isin/C_public.jsp?strMode=2'
-# otc_page = 'http://isin.twse.com.tw/isin/C_public.jsp?strMode=4'
-stock_list = getStockList(centralized_page)
-root_path = '/userap/BuySellReport/'
+
+logging.info("Loading alphabet pictures for captchaSolver")
+root_path = '/userap/BuySellReport'
 alphabet_dict = {}
-for png in os.listdir(root_path + 'alphabet/'):
+for png in os.listdir(root_path + os.sep + 'alphabet'):
     if '.png' not in png:
         continue
     alphabet = png.replace('.png', '')
 
-    image = ~(cv2.imread(root_path + 'alphabet/' + png))
+    image = ~(cv2.imread(root_path + os.sep + 'alphabet' + os.sep + png))
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     ret, threshold = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
@@ -150,11 +157,11 @@ for png in os.listdir(root_path + 'alphabet/'):
         break
 
 session = None
-start = time()
-#base_info_list = []
-empty_list = []
-total_try_count = 0
 root_url = 'https://bsr.twse.com.tw/bshtm/'
+twse_page = 'http://isin.twse.com.tw/isin/C_public.jsp?strMode=2'
+
+logging.info('get stock list')
+stock_list = getStockList(twse_page)
 
 today_dt = datetime.now()
 hour = today_dt.hour
@@ -162,29 +169,31 @@ if hour < 9:
     today_dt = today_dt - timedelta(hours=9)
 data_dt = today_dt.strftime('%Y%m%d')
 
-folder = root_path + 'bs_data/{}'.format(data_dt)
-if not os.path.exists(folder):
-    os.mkdir(folder)
-if not os.path.exists(folder + os.sep + 'twse'):
-    os.mkdir(folder + os.sep + 'twse')
-folder = folder + os.sep + 'twse'
-stock_file_list = [file_name.replace('.csv', '') for file_name in os.listdir(folder) if '.csv' in file_name and len(file_name) == 8]
-warrant_file_list = [file_name.replace('.csv', '') for file_name in os.listdir(folder) if '.csv' in file_name and len(file_name) == 10]
+logging.info('Check if data path is not existed')
+data_path = root_path + os.sep + 'bs_data' + os.sep + data_dt 
+if not os.path.exists(data_path + os.sep + 'twse'):
+    # check its parent folder
+    if not os.path.exists(data_path):
+        os.mkdir(data_path)
+    os.mkdir(data_path + os.sep + 'twse')
+data_path = data_path + os.sep + 'twse'
+
+logging.info('Check if any stocks/warrants had been crawled')
+stock_file_list = [file_name.replace('.csv', '') for file_name in os.listdir(data_path) if '.csv' in file_name and len(file_name) == 8]
+warrant_file_list = [file_name.replace('.csv', '') for file_name in os.listdir(data_path) if '.csv' in file_name and len(file_name) == 10]
 file_list = sorted(stock_file_list) + sorted(warrant_file_list)
 last_index = 0
 if len(file_list) != 0:
     last_index = stock_list.index(file_list[-1]) + 1
 final_stock_list = stock_list[last_index:]
 actual_stock_list = []
+
+logging.info('Start to crawl data')
 for stock_code in final_stock_list:
-    print(stock_code)
     headers = {'User-Agent':'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/48.0.2564.116 Safari/537.36' }
     failed = True
-    try_count = 0
     while failed:
         try:
-            try_count += 1
-            #sleep(0.1)
             if session != None:
                 session.close()
             session = requests.Session()
@@ -193,17 +202,24 @@ for stock_code in final_stock_list:
                 soup = BeautifulSoup(response.text, 'html.parser')
                 hidden_elements = soup.find_all('input', type='hidden')
 
+                # get captcha image to solve
                 img_id = soup.find_all('img')[1].attrs['src']
                 img_url = root_url + img_id
                 img = session.get(img_url, stream = True)
                 if img.ok:
-                    f = open(root_path + 'tmp.png', 'wb')
+                    logging.info('download captcha image')
+                    f = open(root_path + os.sep + 'tmp.png', 'wb')
                     shutil.copyfileobj(img.raw, f)
                     f.close()
-                    captcha_num = captcha_solver(root_path + 'tmp.png')
+                    
+                    logging.info('solve captcha by image recognition')
+                    captcha_num = captchaSolver(root_path + os.sep + 'tmp.png')
                     if captcha_num == None:
+                        logging.info('captcha failed')
                         continue
-                    #print(captcha_num)
+                    
+                    logging.info('captch pass')
+                    logging.info('send post request to get data')
                     payload = {'RadioButton_Normal':'RadioButton_Normal', 
                                'TextBox_Stkno': stock_code, 
                                'btnOK':'查詢',
@@ -212,32 +228,18 @@ for stock_code in final_stock_list:
                         payload[element.attrs['name']] = element.attrs['value']
                     post_response = session.post(root_url + 'bsMenu.aspx', data = payload, headers = headers)
                     if '查無資料' in post_response.text:
-                        empty_list.append(stock_code)
                         failed = False
                         continue
                     if 'HyperLink_DownloadCSV' not in post_response.text:
                         continue
 
-                    main_table = None
-                    while main_table == None:
-                        bs_page = session.get(root_url + 'bsContent.aspx?v=t', headers = headers)
-                        html_content = BeautifulSoup(bs_page.text, 'html.parser')
-                        main_table = html_content.select_one('table table table')
-                    rows = main_table.select('tr')
-                    base_info = {}
-                    for row in rows:
-                        key = ''
-                        value = ''
-                        kv_pairs = row.select('td')
-                        for i in range(len(kv_pairs)):
-                            if i % 2 == 1:
-                                key = kv_pairs[i-1].text.replace('\r\n', '').replace(' ', '')
-                                val = kv_pairs[i].text.replace('\r\n', '').replace(' ', '')
-                                base_info[key] = val
-                    #base_info['公司名稱'] = base_info['股票代號'].split(u'\xa0')[1]
-                    #base_info['股票代號'] = base_info['股票代號'].split(u'\xa0')[0]
-                    #base_info_list.append(base_info)
-
+                    logging.info('extract transaction date from html page')
+                    bs_page = session.get(root_url + 'bsContent.aspx?v=t', headers = headers)
+                    html_content = BeautifulSoup(bs_page.text, 'html.parser')
+                    main_table = html_content.select_one('table table table')
+                    tx_date = main_table.select('tr td')[1].text.strip().replace('\r\n', '')
+                    
+                    logging.info('parse and download buy/sell report data')
                     bs_report = session.get(root_url + 'bsContent.aspx', headers = headers)
                     bs_df = pd.read_csv(StringIO(bs_report.text), sep=',', skiprows=2)
                     df_part1 = bs_df.iloc[:, :5]
@@ -246,19 +248,16 @@ for stock_code in final_stock_list:
                     df_merged = df_part1.append(df_part2).sort_values('序號')
                     df_merged['券商'] = df_merged['券商'].str[:4]
                     del df_merged['序號']
-                    df_merged['日期'] = base_info['交易日期']
-                    df_merged.to_csv(root_path + 'bs_data/{}/twse/{}.csv'.format(data_dt, stock_code), encoding='utf8', index=False)
+                    df_merged['日期'] = tx_date
+                    df_merged.to_csv(root_path + os.sep + 'bs_data' + os.sep + data_dt + os.sep + 'twse' + os.sep + '{}.csv'.format(stock_code), encoding='utf8', index=False)
                     actual_stock_list.append(stock_code)
+                    logging.info(stock_code + 'has been crawled')
                     failed = False
-                    total_try_count += try_count
         except Exception as e:
-            print('Exception:', e.args[0])
-    # print('Try count:' , try_count)
-    # print('---------------')
-#data_dt = base_info['交易日期'].replace('/', '')
-#pd.DataFrame(base_info_list).drop_duplicates().to_csv(root_path + 'basic_data/{}.csv'.format(data_dt), encoding='utf8', index=False)
+            logging.info(traceback.format_exc())
 end = time()
-print("Total count:", len(final_stock_list))
-print("Actual count:", len(set(actual_stock_list)))
-print("Missed stock:", set(final_stock_list)-set(actual_stock_list))
-print("Execution Time:", end-start)
+logging.info("Total count:", len(final_stock_list))
+logging.info("Actual count:", len(set(actual_stock_list)))
+logging.info("Missed stock:", set(final_stock_list)-set(actual_stock_list))
+logging.info("Execution Time:", end-start)
+logging.info('End time: {}'.format(datetime.now()))
