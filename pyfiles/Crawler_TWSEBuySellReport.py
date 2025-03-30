@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 import os
 import cv2
+import json
 import shutil
 import logging
 import requests
@@ -36,32 +37,91 @@ def getStockList(url):
     return code_list
 '''
 
-def getStockList(url):
-    df = pd.read_html(url,encoding='big5hkscs',header=0)[0]
-    stock_list = []
-    warrant_list = []
-    stock_flag = False
-    except_str = ['C', 'B', 'X', 'Y']
-    for row in df.iterrows():
-        stock_no = row[1]['有價證券代號及名稱'].split('\u3000')[0]
+def getStockList():
+    today = None
+    now_dt = datetime.now()
+    if now_dt.hour <= 14:
+        today = (now_dt - timedelta(days=1)).strftime('%Y%m%d')
+    else:
+        today = now_dt.strftime('%Y%m%d')
+    resp = requests.get(f'https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date={today}&type=0099P&response=json')
+    obj = json.loads(resp.content.decode('utf8'))
+    table = None
+    for t in obj['tables']:
+        if len(t) != 0:
+            table = t
+    fields = table['fields']
+    data = table['data']
+    pdf = pd.DataFrame(data, columns=fields)
+    etf_list = pdf['證券代號'].to_list()
 
-        if stock_no == '股票':
-            stock_flag = True
-            continue
-        elif stock_no == '上市認購(售)權證':
-            stock_flag = False
-            continue
-        elif stock_no == 'ETN':
-            break
+    resp = requests.get(f'https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date={today}&type=ALLBUT0999&response=json')
+    obj = json.loads(resp.content.decode('utf8'))
+    table = None
+    if obj.get('tables'):
+        for t in obj['tables']:
+            if len(t) != 0:
+                table = t
+    else:
+        logging.warning(f'Get empty table for date: {today}')
+        return []
+    fields = table['fields']
+    data = table['data']
+    pdf = pd.DataFrame(data, columns=fields)
+    pdf = pdf[pdf['成交筆數']!=0]
+    pdf = pdf[~pdf['證券代號'].isin(etf_list)]
+    stock_list = pdf[pdf['證券代號'].apply(lambda x: len(x) == 4)]['證券代號'].to_list()
+    return stock_list
 
-        if stock_flag:
-            stock_list.append(stock_no[:4])
-        else:
-            if any(x in stock_no for x in except_str):
-                pass
-            else:
-                warrant_list.append(stock_no[:6])
-    return sorted(stock_list) + sorted(warrant_list)
+
+def getWarrantList():
+    today = None
+    now_dt = datetime.now()
+    if now_dt.hour <= 14:
+        today = (now_dt - timedelta(days=1)).strftime('%Y%m%d')
+    else:
+        today = now_dt.strftime('%Y%m%d')
+    pdf_list = []
+    # call: 0999 / put: 0999P
+    warrant_type = ['0999', '0999P']
+    for w_type in warrant_type:
+        resp = requests.get(f'https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date={today}&type={w_type}&response=json')
+        obj = json.loads(resp.content.decode('utf8'))
+        table = None
+        for t in obj['tables']:
+            if len(t) != 0:
+                table = t
+        fields = table['fields']
+        data = table['data']
+        pdf = pd.DataFrame(data, columns=fields)
+        pdf['成交股數'] = pd.to_numeric(pdf['成交股數'].str.replace(',', ''), errors='coerce')
+        pdf['成交筆數'] = pd.to_numeric(pdf['成交筆數'].str.replace(',', ''), errors='coerce')
+        pdf = pdf[pdf['成交筆數']!=0]
+        pdf_list.append(pdf)
+    concat_pdf = pd.concat(pdf_list, axis=0)
+    concat_pdf = concat_pdf.sort_values('成交股數', ascending=False)
+    wrn_list = concat_pdf[concat_pdf['成交筆數']!=0]['證券代號'].to_list()
+    return wrn_list
+
+# def getWarrantList():
+#     # market: 1=上市; 2=上櫃 / wrn_class: 1=認購; 2=認售
+#     wrn_classes = ['1', '2']
+#     intro_url = "https://mops.twse.com.tw/mops/web/t90sbfa01?encodeURIComponent=1&step=1&ver=1.9&TYPEK=&market=1&wrn_type=all&stock_no=&wrn_no=&co_id=all&left_month=all&return_rate=all&price_down=&price_up=&price_inout=all&newprice_down=&newprice_up=&fin_down=&fin_up=&sort=1&wrn_class="
+#     download_url  = "https://mops.twse.com.tw/server-java/t105sb02?firstin=true&step=10&filename="
+
+#     wrn_list = []
+#     for w_class in wrn_classes:
+#         intro_html = requests.post(f"{intro_url}{w_class}").text
+#         soup = BeautifulSoup(intro_html, 'html.parser')
+#         input_list = soup.find_all('input')
+#         download_filename = ''
+#         for i in input_list:
+#             input_name = i.get('name')
+#             if input_name == 'filename':
+#                 download_filename = i.get('value')
+#         wrn_pdf = pd.read_csv(f"{download_url}{download_filename}", encoding='big5hkscs')
+#         wrn_list += wrn_pdf.iloc[:, 0].str.replace("=", "").str.replace("\"", "").to_list()
+#     return wrn_list
 
 def mse(imageA, imageB):
     err = np.sum((imageA.astype("float") - imageB.astype("float"))**2)
@@ -130,14 +190,14 @@ def captchaSolver(img_path):
 
 
 logging.info("Loading alphabet pictures for captchaSolver")
-root_path = '/userap/BuySellReport'
+root_path = '/Users/fang/StockAnalysis'
 alphabet_dict = {}
-for png in os.listdir(root_path + os.sep + 'alphabet'):
+for png in os.listdir(root_path + os.sep + "img" + os.sep + 'alphabet'):
     if '.png' not in png:
         continue
     alphabet = png.replace('.png', '')
 
-    image = ~(cv2.imread(root_path + os.sep + 'alphabet' + os.sep + png))
+    image = ~(cv2.imread(root_path + os.sep + "img" + os.sep + 'alphabet' + os.sep + png))
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     ret, threshold = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
@@ -161,7 +221,7 @@ root_url = 'https://bsr.twse.com.tw/bshtm/'
 twse_page = 'http://isin.twse.com.tw/isin/C_public.jsp?strMode=2'
 
 logging.info('get stock list')
-stock_list = getStockList(twse_page)
+stock_list = getStockList() + getWarrantList()
 
 today_dt = datetime.now()
 hour = today_dt.hour
@@ -170,7 +230,7 @@ if hour < 9:
 data_dt = today_dt.strftime('%Y%m%d')
 
 logging.info('Check if data path is not existed')
-data_path = root_path + os.sep + 'bs_data' + os.sep + data_dt 
+data_path = root_path + os.sep + 'data' + os.sep + 'bs_data' + os.sep + data_dt 
 if not os.path.exists(data_path + os.sep + 'twse'):
     # check its parent folder
     if not os.path.exists(data_path):
@@ -184,7 +244,7 @@ warrant_file_list = [file_name.replace('.csv', '') for file_name in os.listdir(d
 file_list = sorted(stock_file_list) + sorted(warrant_file_list)
 last_index = 0
 if len(file_list) != 0:
-    last_index = stock_list.index(file_list[-1]) + 1
+    last_index = stock_list.index(sorted(file_list)[-1]) + 1
 final_stock_list = stock_list[last_index:]
 actual_stock_list = []
 
@@ -192,6 +252,8 @@ logging.info('Start to crawl data')
 for stock_code in final_stock_list:
     headers = {'User-Agent':'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/48.0.2564.116 Safari/537.36' }
     failed = True
+    failed_cnt = 0
+    logging.info(f"Trying to crawl data: {stock_code}")
     while failed:
         try:
             if session != None:
@@ -207,19 +269,20 @@ for stock_code in final_stock_list:
                 img_url = root_url + img_id
                 img = session.get(img_url, stream = True)
                 if img.ok:
-                    logging.info('download captcha image')
+                    logging.debug('download captcha image')
                     f = open(root_path + os.sep + 'tmp.png', 'wb')
                     shutil.copyfileobj(img.raw, f)
                     f.close()
-                    
-                    logging.info('solve captcha by image recognition')
+
+                    logging.debug('solve captcha by image recognition')
                     captcha_num = captchaSolver(root_path + os.sep + 'tmp.png')
                     if captcha_num == None:
-                        logging.info('captcha failed')
+                        logging.warning('captcha failed')
+                        failed_cnt += 1
                         continue
-                    
-                    logging.info('captch pass')
-                    logging.info('send post request to get data')
+
+                    logging.debug('captch pass')
+                    logging.debug('send post request to get data')
                     payload = {'RadioButton_Normal':'RadioButton_Normal', 
                                'TextBox_Stkno': stock_code, 
                                'btnOK':'查詢',
@@ -228,36 +291,46 @@ for stock_code in final_stock_list:
                         payload[element.attrs['name']] = element.attrs['value']
                     post_response = session.post(root_url + 'bsMenu.aspx', data = payload, headers = headers)
                     if '查無資料' in post_response.text:
+                        logging.info('no result found.')
+                        open(root_path + os.sep + "data" + os.sep + 'bs_data' + os.sep + data_dt + os.sep + 'twse' + os.sep + '{}.csv'.format(stock_code), "a")
                         failed = False
                         continue
                     if 'HyperLink_DownloadCSV' not in post_response.text:
                         continue
 
-                    logging.info('extract transaction date from html page')
+                    logging.debug('extract transaction date from html page')
                     bs_page = session.get(root_url + 'bsContent.aspx?v=t', headers = headers)
                     html_content = BeautifulSoup(bs_page.text, 'html.parser')
                     main_table = html_content.select_one('table table table')
+                    if not main_table:
+                        failed_cnt += 1
+                        logging.warning('main_table is None')
+                        continue
                     tx_date = main_table.select('tr td')[1].text.strip().replace('\r\n', '')
-                    
-                    logging.info('parse and download buy/sell report data')
+
+                    logging.debug('parse and download buy/sell report data')
                     bs_report = session.get(root_url + 'bsContent.aspx', headers = headers)
+                    if not bs_report.ok:
+                        failed += 1
+                        logging.warning('403 forbidden while crawling data')
+                        continue
                     bs_df = pd.read_csv(StringIO(bs_report.text), sep=',', skiprows=2)
                     df_part1 = bs_df.iloc[:, :5]
                     df_part2 = bs_df.iloc[:, 6:]
                     df_part2.columns = df_part1.columns
-                    df_merged = df_part1.append(df_part2).sort_values('序號')
+                    df_merged = pd.concat([df_part1,df_part2], axis=0).sort_values('序號')
                     df_merged['券商'] = df_merged['券商'].str[:4]
                     del df_merged['序號']
                     df_merged['日期'] = tx_date
-                    df_merged.to_csv(root_path + os.sep + 'bs_data' + os.sep + data_dt + os.sep + 'twse' + os.sep + '{}.csv'.format(stock_code), encoding='utf8', index=False)
+                    df_merged.to_csv(root_path + os.sep + "data" + os.sep + 'bs_data' + os.sep + data_dt + os.sep + 'twse' + os.sep + '{}.csv'.format(stock_code), encoding='utf8', index=False)
                     actual_stock_list.append(stock_code)
-                    logging.info(stock_code + 'has been crawled')
+                    logging.info(f'{stock_code} has been crawled with {failed_cnt} failures')
                     failed = False
         except Exception as e:
-            logging.info(traceback.format_exc())
+            logging.warning(traceback.format_exc())
 end = time()
-logging.info("Total count:", len(final_stock_list))
-logging.info("Actual count:", len(set(actual_stock_list)))
-logging.info("Missed stock:", set(final_stock_list)-set(actual_stock_list))
-logging.info("Execution Time:", end-start)
-logging.info('End time: {}'.format(datetime.now()))
+logging.info(f"Total count: {len(final_stock_list)}")
+logging.info(f"Actual count: {len(set(actual_stock_list))}")
+logging.info(f"Missed stock: {set(final_stock_list)-set(actual_stock_list)}")
+logging.info(f"Execution Time: {end-start}")
+logging.info(f"End time: {datetime.now()}")
