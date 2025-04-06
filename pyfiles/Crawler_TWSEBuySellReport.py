@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 import os
 import cv2
+import sys
 import json
 import shutil
 import logging
@@ -24,27 +25,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logging.info('Start time: {}'.format(datetime.now()))
 start = time()
 
-''' 
-# this version of getStockList only includes stocks but not warrants
-def getStockList(url):
-    df = pd.read_html(url,encoding='big5hkscs',header=0)[0]
-    raw_list = df['有價證券代號及名稱']
-    code_list = []
-    for code in raw_list:
-        code = code.split('　')[0]
-        if len(code) == 4:
-            code_list.append(code)
-    return code_list
-'''
-
-def getStockList():
-    today = None
-    now_dt = datetime.now()
-    if now_dt.hour <= 14:
-        today = (now_dt - timedelta(days=1)).strftime('%Y%m%d')
-    else:
-        today = now_dt.strftime('%Y%m%d')
-    resp = requests.get(f'https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date={today}&type=0099P&response=json')
+def getStockList(dt):
+    resp = requests.get(f'https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date={dt}&type=0099P&response=json')
     obj = json.loads(resp.content.decode('utf8'))
     table = None
     for t in obj['tables']:
@@ -55,7 +37,7 @@ def getStockList():
     pdf = pd.DataFrame(data, columns=fields)
     etf_list = pdf['證券代號'].to_list()
 
-    resp = requests.get(f'https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date={today}&type=ALLBUT0999&response=json')
+    resp = requests.get(f'https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date={dt}&type=ALLBUT0999&response=json')
     obj = json.loads(resp.content.decode('utf8'))
     table = None
     if obj.get('tables'):
@@ -63,7 +45,7 @@ def getStockList():
             if len(t) != 0:
                 table = t
     else:
-        logging.warning(f'Get empty table for date: {today}')
+        logging.warning(f'Get empty table for date: {dt}')
         return []
     fields = table['fields']
     data = table['data']
@@ -74,18 +56,12 @@ def getStockList():
     return stock_list
 
 
-def getWarrantList():
-    today = None
-    now_dt = datetime.now()
-    if now_dt.hour <= 14:
-        today = (now_dt - timedelta(days=1)).strftime('%Y%m%d')
-    else:
-        today = now_dt.strftime('%Y%m%d')
+def getWarrantList(dt):
     pdf_list = []
     # call: 0999 / put: 0999P
     warrant_type = ['0999', '0999P']
     for w_type in warrant_type:
-        resp = requests.get(f'https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date={today}&type={w_type}&response=json')
+        resp = requests.get(f'https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date={dt}&type={w_type}&response=json')
         obj = json.loads(resp.content.decode('utf8'))
         table = None
         for t in obj['tables']:
@@ -220,14 +196,18 @@ session = None
 root_url = 'https://bsr.twse.com.tw/bshtm/'
 twse_page = 'http://isin.twse.com.tw/isin/C_public.jsp?strMode=2'
 
-logging.info('get stock list')
-stock_list = getStockList() + getWarrantList()
+date_dt = None
+if len(sys.argv) > 1:
+    data_dt = sys.argv[1]
+else:
+    today_dt = datetime.now()
+    hour = today_dt.hour
+    if hour < 9:
+        today_dt = today_dt - timedelta(hours=9)
+    data_dt = today_dt.strftime('%Y%m%d')
 
-today_dt = datetime.now()
-hour = today_dt.hour
-if hour < 9:
-    today_dt = today_dt - timedelta(hours=9)
-data_dt = today_dt.strftime('%Y%m%d')
+logging.info('get stock list')
+stock_list = getStockList(data_dt) + getWarrantList(data_dt)
 
 logging.info('Check if data path is not existed')
 data_path = root_path + os.sep + 'data' + os.sep + 'bs_data' + os.sep + data_dt 
@@ -277,11 +257,11 @@ for stock_code in final_stock_list:
                     logging.debug('solve captcha by image recognition')
                     captcha_num = captchaSolver(root_path + os.sep + 'tmp.png')
                     if captcha_num == None:
-                        logging.warning('captcha failed')
+                        logging.debug('captcha failed')
                         failed_cnt += 1
                         continue
 
-                    logging.debug('captch pass')
+                    logging.debug('captcha pass')
                     logging.debug('send post request to get data')
                     payload = {'RadioButton_Normal':'RadioButton_Normal', 
                                'TextBox_Stkno': stock_code, 
@@ -327,7 +307,7 @@ for stock_code in final_stock_list:
                     logging.info(f'{stock_code} has been crawled with {failed_cnt} failures')
                     failed = False
         except Exception as e:
-            logging.warning(traceback.format_exc())
+            logging.debug(traceback.format_exc())
 end = time()
 logging.info(f"Total count: {len(final_stock_list)}")
 logging.info(f"Actual count: {len(set(actual_stock_list))}")
