@@ -12,13 +12,13 @@ import traceback
 import collections
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 
 from io import StringIO
 from os import listdir
 from time import sleep, time
 from random import randint
 from datetime import datetime, timedelta
+from keras.models import load_model
 from bs4 import BeautifulSoup
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -79,122 +79,62 @@ def getWarrantList(dt):
     wrn_list = concat_pdf[concat_pdf['成交筆數']!=0]['證券代號'].to_list()
     return wrn_list
 
-# def getWarrantList():
-#     # market: 1=上市; 2=上櫃 / wrn_class: 1=認購; 2=認售
-#     wrn_classes = ['1', '2']
-#     intro_url = "https://mops.twse.com.tw/mops/web/t90sbfa01?encodeURIComponent=1&step=1&ver=1.9&TYPEK=&market=1&wrn_type=all&stock_no=&wrn_no=&co_id=all&left_month=all&return_rate=all&price_down=&price_up=&price_inout=all&newprice_down=&newprice_up=&fin_down=&fin_up=&sort=1&wrn_class="
-#     download_url  = "https://mops.twse.com.tw/server-java/t105sb02?firstin=true&step=10&filename="
-
-#     wrn_list = []
-#     for w_class in wrn_classes:
-#         intro_html = requests.post(f"{intro_url}{w_class}").text
-#         soup = BeautifulSoup(intro_html, 'html.parser')
-#         input_list = soup.find_all('input')
-#         download_filename = ''
-#         for i in input_list:
-#             input_name = i.get('name')
-#             if input_name == 'filename':
-#                 download_filename = i.get('value')
-#         wrn_pdf = pd.read_csv(f"{download_url}{download_filename}", encoding='big5hkscs')
-#         wrn_list += wrn_pdf.iloc[:, 0].str.replace("=", "").str.replace("\"", "").to_list()
-#     return wrn_list
-
-def mse(imageA, imageB):
-    err = np.sum((imageA.astype("float") - imageB.astype("float"))**2)
-    err /= float(imageA.shape[0] * imageA.shape[1])
-    return err
-
-def getMseTuples(pic):
-    mse_dict = {}
-    for alphabet in alphabet_dict:
-        mse_dict[alphabet] = mse(alphabet_dict[alphabet], pic)
-    sorted_mse = sorted(mse_dict.items(), key=operator.itemgetter(1))
-    return sorted_mse
-
-def captchaSolver(img_path):
-    image = cv2.imread(img_path)
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    ret, threshold = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
-    kernel = np.ones((2,2), np.uint16)
-    erosion = cv2.erode(threshold, kernel, iterations=2)
-    blurred = cv2.GaussianBlur(erosion, (3,3), 0)
-    contours, hierarchy = cv2.findContours(blurred.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    cnts = sorted([(c, cv2.boundingRect(c)[0]) for c in contours], key = lambda x: x[1]) 
+def preprocessing(from_filename, to_filename):
+    WIDTH = 200
+    HEIGHT = 60
+    CROP_LEFT = 10
+    CROP_TOP = 10
+    CROP_BOTTON = 10
     
-    ary = []
-    for (c, _) in cnts:
-        (x, y, w, h) = cv2.boundingRect(c)
-        if w>15 and h>15:
-            ary.append((x, y, w, h))      
-
-    index = 0
-    prev = (-100, -100, 100, 100)
-    remove_list = []
-    for _, obj in enumerate(ary):
-        if (obj[0]-prev[0] <= 15
-            and obj[1]-prev[1] <= 15
-            and obj[2] < prev[2]
-            and obj[3] < prev[3]):
-            remove_list.append(obj)
-        prev = obj
+    if not os.path.isfile(from_filename):
+        return
+    img = cv2.imread(from_filename)
+    denoised = cv2.fastNlMeansDenoisingColored(img, None, 30, 30, 7, 21)
     
-    for obj in remove_list:
-        ary.remove(obj)
-        
-    if len(ary) != 5:
-        return None
+    kernel = np.ones((4,4), np.uint8)
+    erosion = cv2.erode(denoised, kernel, iterations=1)
+    burred = cv2.GaussianBlur(erosion, (5, 5), 0)
     
-    result = ''
-    for id, (x, y, w, h) in enumerate(ary):
-        roi = blurred[y:y+h, x:x+w]
-        thresh = roi.copy()
-        res = cv2.resize(thresh, (50, 50))
-        kernel = np.ones((3,3), np.uint16)
-        edged = cv2.Canny(res, 100, 200)
-        res = cv2.dilate(edged, kernel, iterations=2)
-        
-        mse_dict = getMseTuples(res)
-        first = mse_dict[0]
-        second = mse_dict[1]
-        if second[1]-first[1] <= 1000:
-            return None
-        if first[1] > 18000:
-            return None
-            
-        result += first[0]
-    return result
-
-
-logging.info("Loading alphabet pictures for captchaSolver")
-root_path = '/Users/fang/StockAnalysis'
-alphabet_dict = {}
-for png in os.listdir(root_path + os.sep + "img" + os.sep + 'alphabet'):
-    if '.png' not in png:
-        continue
-    alphabet = png.replace('.png', '')
-
-    image = ~(cv2.imread(root_path + os.sep + "img" + os.sep + 'alphabet' + os.sep + png))
-
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    ret, threshold = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+    edged = cv2.Canny(burred, 30, 150)
+    dilation = cv2.dilate(edged, kernel, iterations=1)
     
-    kernel = np.ones((3,3), np.uint16)
-    erosion = cv2.dilate(threshold, kernel, iterations=1)
-    
-    contours, hierarchy = cv2.findContours(erosion.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    cnts = sorted([(c, cv2.boundingRect(c)[0]) for c in contours], key = lambda x: x[1])
+    crop_img = dilation[CROP_TOP:HEIGHT - CROP_BOTTON, CROP_LEFT:WIDTH]
 
-    for (c, _) in cnts:
-        (x, y, w, h) = cv2.boundingRect(c)
-        contour = erosion[y:y+h, x:x+w]
-        res = cv2.resize(contour, (50, 50))
-        ret, threshold = cv2.threshold(res, 200, 255, cv2.THRESH_BINARY)
-        alphabet_dict[alphabet] = threshold
-        break
+    cv2.imwrite(to_filename, crop_img)
+    return
+
+def one_hot_encoding(text, allowedChars):
+    label_list = []
+    for c in text:
+        onehot = [0] * len(allowedChars)
+        onehot[allowedChars.index(c)] = 1
+        label_list.append(onehot)
+    return label_list
+
+def one_hot_decoding(prediction, allowedChars):
+    text = ''
+    for predict in prediction:
+        value = np.argmax(predict[0])
+        text += allowedChars[value]
+    return text
+
+def captchaSolver(source_img_path):
+    img_subfolder = 'img'
+    file_name = 'preprocessing.jpg'
+    processed_img_path = os.sep.join([root_path, img_subfolder, file_name])
+    allowed_chars = 'ACDEFGHJKLNPQRTUVXYZ2346789';
+    
+    preprocessing(source_img_path, processed_img_path)
+    train_data = np.stack([np.array(cv2.imread(processed_img_path))/255.0])
+    prediction = model.predict(train_data)
+    predict_captcha = one_hot_decoding(prediction, allowed_chars)
+    return predict_captcha
 
 session = None
 root_url = 'https://bsr.twse.com.tw/bshtm/'
 twse_page = 'http://isin.twse.com.tw/isin/C_public.jsp?strMode=2'
+root_path = "./"
+data_subfolder = 'data'
 
 date_dt = None
 if len(sys.argv) > 1:
@@ -228,6 +168,11 @@ if len(file_list) != 0:
 final_stock_list = stock_list[last_index:]
 actual_stock_list = []
 
+logging.debug('model loading...')
+model = load_model(os.sep.join([root_path, data_subfolder, "twse_cnn_model.hdf5"]))
+logging.debug('loading completed')
+
+
 logging.info('Start to crawl data')
 for stock_code in final_stock_list:
     headers = {'User-Agent':'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/48.0.2564.116 Safari/537.36' }
@@ -250,12 +195,12 @@ for stock_code in final_stock_list:
                 img = session.get(img_url, stream = True)
                 if img.ok:
                     logging.debug('download captcha image')
-                    f = open(root_path + os.sep + 'tmp.png', 'wb')
+                    f = open(root_path + os.sep + 'img' + os.sep + 'tmp.png', 'wb')
                     shutil.copyfileobj(img.raw, f)
                     f.close()
-
+                    
                     logging.debug('solve captcha by image recognition')
-                    captcha_num = captchaSolver(root_path + os.sep + 'tmp.png')
+                    captcha_num = captchaSolver(root_path + os.sep + 'img' + os.sep + 'tmp.png')
                     if captcha_num == None:
                         logging.debug('captcha failed')
                         failed_cnt += 1

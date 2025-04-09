@@ -1,0 +1,21 @@
+[project]
+name = "stockanalysis"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "TTFang",email = "a86681718@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "opencv-python[contrib] (>=4.11.0.86,<5.0.0.0)",
+    "requests (>=2.32.3,<3.0.0)",
+    "pandas (>=2.2.3,<3.0.0)",
+    "bs4 (>=0.0.2,<0.0.3)",
+    "tensorflow (<=2.15)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
