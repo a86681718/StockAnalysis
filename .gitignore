@@ -3,5 +3,3 @@ data/*
 tmp/*
 img/*
 pyfiles/__pycache__/*
-img/preprocessing.jpg
-img/tmp.png
