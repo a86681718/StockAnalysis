@@ -213,8 +213,12 @@ if __name__ == "__main__":
 
     # Keep track of crawled stocks
     logging.info("Check if any stocks/warrants had been crawled")
-    data_path = f"{ROOT_PATH}/{DATA_SUBFOLDER}/bs_data/{data_dt}/twse"
-    print(data_path)
+    data_path = os.path.join(ROOT_PATH, DATA_SUBFOLDER, "bs_data", data_dt)
+    if not os.path.exists(os.path.join(data_path, 'twse')):
+        # check its parent folder
+        if not os.path.exists(data_path):
+            os.mkdir(data_path)
+        os.mkdir(os.path.join(data_path, 'twse'))
     crawled_list = [file_name.replace('.csv', '') for file_name in os.listdir(data_path) if '.csv' in file_name]
     final_stock_list = [stock_no for stock_no in stock_list if stock_no not in crawled_list]
 
