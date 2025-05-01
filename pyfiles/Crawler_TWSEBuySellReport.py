@@ -10,10 +10,12 @@ import requests
 import traceback
 import numpy as np
 import pandas as pd
+import zipfile
 from io import StringIO
 from datetime import datetime, timedelta
 from keras.models import load_model
 from bs4 import BeautifulSoup
+from google.cloud import storage
 
 # Logging configuration
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -188,6 +190,22 @@ def crawl_data(stock_list, model, data_dt):
 
     return actual_stock_list
 
+def zip_folder(folder_path, output_zip_path):
+    with zipfile.ZipFile(output_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for root, _, files in os.walk(folder_path):
+            for file in files:
+                file_path = os.path.join(root, file)
+                arcname = os.path.relpath(file_path, folder_path)
+                zipf.write(file_path, arcname)
+    print(f"Folder zipped to {output_zip_path}")
+
+def upload_to_gcs(bucket_name, source_file_path, destination_blob_name):
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(destination_blob_name)
+    blob.upload_from_filename(source_file_path)
+    print(f"Uploaded to gs://{bucket_name}/{destination_blob_name}")
+
 # Main execution
 if __name__ == "__main__":
     logging.info(f"Start time: {datetime.now()}")
@@ -225,6 +243,16 @@ if __name__ == "__main__":
     # Crawl data
     logging.info("Starting data crawling...")
     actual_stock_list = crawl_data(final_stock_list, model, data_dt)
+
+    # Zip files and upload to GCS
+    zip_name = f"{data_dt}.zip"
+    zip_folder(data_path, zip_name)
+
+    # Step 2: 上傳
+    bucket_name = 'stock-crawler'
+
+    gcs_blob_name = f'bs_report/' + zip_name
+    upload_to_gcs(bucket_name, zip_name, gcs_blob_name)
 
     # Summary
     end_time = datetime.now()
