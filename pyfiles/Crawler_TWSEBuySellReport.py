@@ -31,7 +31,7 @@ ALLOWED_CHARS = 'ACDEFGHJKLNPQRTUVXYZ2346789'
 def fetch_json(url):
     """Fetch and parse JSON from a URL."""
     try:
-        resp = requests.get(url)
+        resp = requests.get(url, verify=False)
         resp.raise_for_status()
         return json.loads(resp.content.decode('utf8'))
     except Exception as e:
@@ -249,7 +249,7 @@ if __name__ == "__main__":
     zip_folder(data_path, zip_name)
 
     # Step 2: 上傳
-    bucket_name = 'stock-crawler'
+    bucket_name = 'stock-crawler-bucket'
 
     gcs_blob_name = f'bs_report/' + zip_name
     upload_to_gcs(bucket_name, zip_name, gcs_blob_name)
