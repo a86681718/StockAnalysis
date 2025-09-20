@@ -12,10 +12,14 @@ dependencies = [
     "requests (>=2.32.3,<3.0.0)",
     "pandas (>=2.2.3,<3.0.0)",
     "bs4 (>=0.0.2,<0.0.3)",
-    "tensorflow (<=2.15)"
+    "tensorflow (<=2.15)",
+    "google-cloud-storage (>=3.1.0,<4.0.0)"
 ]
 
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.requires-plugins]
+poetry-plugin-export = ">=1.8"

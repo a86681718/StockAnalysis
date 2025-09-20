@@ -1,0 +1,42 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/28.1.2 Chrome/138.0.7204.243 Electron/37.4.0 Safari/537.36" version="28.1.2" pages="2">
+  <diagram name="Overview" id="aI616eykWNgWvc1iUzKq">
+    <mxGraphModel dx="786" dy="666" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="3OSO0UhKk56dgp6jqhoB-2" value="當日交易基本資訊 (OHLC)&lt;div&gt;Crawler_DailyTransactionInfo.py&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1">
+          <mxGeometry x="160" y="120" width="220" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="3OSO0UhKk56dgp6jqhoB-3" value="櫃買市場 (TPEX) 券商分點交易資訊&#xa;Crawler_TPEXBuySellReport.py" style="text;whiteSpace=wrap;strokeColor=#6c8ebf;align=center;fontFamily=Helvetica;fontSize=12;verticalAlign=middle;fillColor=#dae8fc;" parent="1" vertex="1">
+          <mxGeometry x="160" y="200" width="220" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="3OSO0UhKk56dgp6jqhoB-5" value="集中市場 (TWSE) 券商分點交易資訊&#xa;Crawler_TWSEBuySellReport.py" style="text;whiteSpace=wrap;strokeColor=#6c8ebf;align=center;fontFamily=Helvetica;fontSize=12;verticalAlign=middle;fillColor=#dae8fc;" parent="1" vertex="1">
+          <mxGeometry x="160" y="280" width="220" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="3OSO0UhKk56dgp6jqhoB-7" value="法說會資訊&#xa;Crawler_InstitutionalInvestorConference.py" style="text;whiteSpace=wrap;strokeColor=#6c8ebf;align=center;fontFamily=Helvetica;fontSize=11;verticalAlign=middle;fillColor=#dae8fc;" parent="1" vertex="1">
+          <mxGeometry x="160" y="360" width="220" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="3OSO0UhKk56dgp6jqhoB-9" value="除權息資訊&#xa;Crawler_DividendInfo.py" style="text;whiteSpace=wrap;strokeColor=#6c8ebf;align=center;fontFamily=Helvetica;fontSize=11;verticalAlign=middle;fillColor=#dae8fc;" parent="1" vertex="1">
+          <mxGeometry x="160" y="430" width="220" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="3OSO0UhKk56dgp6jqhoB-10" value="三大法人買賣超" style="text;whiteSpace=wrap;strokeColor=#6c8ebf;align=center;fontFamily=Helvetica;fontSize=11;verticalAlign=middle;fillColor=#dae8fc;" parent="1" vertex="1">
+          <mxGeometry x="160" y="500" width="220" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="3OSO0UhKk56dgp6jqhoB-12" value="卷商分點基本資料&#xa;Crawler_BrokerList.py" style="text;whiteSpace=wrap;strokeColor=#6c8ebf;align=center;fontFamily=Helvetica;fontSize=11;verticalAlign=middle;fillColor=#dae8fc;" parent="1" vertex="1">
+          <mxGeometry x="160" y="580" width="220" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="3OSO0UhKk56dgp6jqhoB-13" value="權證交易資訊&#xa;Crawler_WarrantDailyInfo.py" style="text;whiteSpace=wrap;strokeColor=#6c8ebf;align=center;fontFamily=Helvetica;fontSize=11;verticalAlign=middle;fillColor=#dae8fc;" parent="1" vertex="1">
+          <mxGeometry x="160" y="650" width="220" height="50" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="vtllQaECrsXtDB3v8TUK" name="第 2 页">
+    <mxGraphModel grid="1" page="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

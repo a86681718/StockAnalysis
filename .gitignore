@@ -3,3 +3,5 @@ data/*
 tmp/*
 img/*
 pyfiles/__pycache__/*
+.ipynb_checkpoints/Untitled Diagram-checkpoint.drawio
+.gitignore

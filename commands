@@ -1,0 +1,101 @@
+gcloud builds submit --tag asia-east1-docker.pkg.dev/bionic-region-455813-b0/my-repo/twse-crawler:0.0.2 .
+poetry export -f requirements.txt --output requirements.txt --without-hashes
+docker build -t stockanalysis:0.0.3 .
+
+# grant permissions of accessing GCS bucket to the default service account
+gcloud projects add-iam-policy-binding bionic-region-455813-b0   --member="serviceAccount:312742415715-compute@developer.gserviceaccount.com"   --role="roles/storage.objectAdmin"
+
+# create a service account and grant permissions of accessing GCS bucket
+gcloud iam service-accounts create gcs-uploader     --description="GCS uploader service account"     --display-name="GCS Uploader"
+gcloud projects add-iam-policy-binding bionic-region-455813-b0 --member="serviceAccount:gcs-uploader@bionic-region-455813-b0.iam.gserviceaccount.com" --role="roles/storage.objectAdmin"
+gcloud iam service-accounts keys create key.json --iam-account=gcs-uploader@bionic-region-455813-b0.iam.gserviceaccount.com
+
+
+gcloud components install cloud-build-local
+gcloud auth configure-docker asia-east1-docker.pkg.dev
+
+docker build -t asia-east1-docker.pkg.dev/bionic-region-455813-b0/my-repo/twse-crawler:1.0.0 .
+docker push asia-east1-docker.pkg.dev/bionic-region-455813-b0/my-repo/twse-crawler:1.0.0
+
+gcloud builds submit --tag asia-east1-docker.pkg.dev/silent-eye-462713-m1/my-repo/tpex-crawler:0.0.2 .
+gcloud builds submit --tag asia-east1-docker.pkg.dev/$PROJECT_ID/my-repo/tpex-crawler:1.0.0 .
+
+gcloud builds submit --tag asia-east1-docker.pkg.dev/$PROJECT_ID/my-repo/twse-crawler:1.0.0 .
+
+===
+silent-eye-462713-m1
+gcloud auth login
+gcloud config set project $PROJECT_ID
+gcloud services enable artifactregistry.googleapis.com # 啟用 Artifact Registry API
+gcloud auth configure-docker asia-east1-docker.pkg.dev
+
+gcloud services enable cloudbuild.googleapis.com --project $PROJECT_ID
+
+gcloud artifacts repositories create my-repo \
+  --repository-format=docker \
+  --location=asia-east1 \
+  --description="Docker repository"
+
+export BUCKET_NAME="stock-crawler-bucket-$(date +%Y%m%d)"
+gcloud storage buckets create gs://$BUCKET_NAME --location=asia-east1
+
+gcloud services enable cloudtasks.googleapis.com
+
+gcloud tasks queues create stock-crawl-queue \
+  --max-dispatches-per-second=3 \
+  --max-concurrent-dispatches=10 \
+  --max-attempts=1 \
+  --location=asia-east1 \
+  --log-sampling-ratio=1.0
+
+ gcloud firestore databases create \
+  --region=asia-east1 \
+  --type=firestore-native
+
+gcloud iam service-accounts create cloud-run \
+  --description="Service account for invoking Cloud Run services" \
+  --display-name="cloud-run"
+
+ gcloud artifacts repositories add-iam-policy-binding my-repo \
+  --location=asia-east1 \
+  --member="serviceAccount:$PROJECT_ID@cloudbuild.gserviceaccount.com" \
+  --role='roles/artifactregistry.writer'
+  
+# 啟用 cloud run
+gcloud services enable run.googleapis.com
+
+gcloud run jobs create tpex-crawler \
+  --image=asia-east1-docker.pkg.dev/sturdy-willow-471513-q1/my-repo/tpex-crawler:1.0.0 \
+  --region=asia-east1 \
+  --tasks=1 \
+  --memory=1Gi \
+  --cpu=2 \
+  --max-retries=3 \
+  --task-timeout=3600s 
+
+gcloud run jobs create twse-crawler \
+  --image=asia-east1-docker.pkg.dev/sturdy-willow-471513-q1/my-repo/twse-crawler:1.0.0 \
+  --region=asia-east1 \
+  --tasks=1 \
+  --memory=2Gi \
+  --cpu=2 \
+  --max-retries=3 \
+  --task-timeout=36000s \
+  --parallelism=1 
+
+
+gcloud scheduler jobs create http prepare-tpex-crawler \
+  --schedule="0 17 * * 1-5" \
+  --time-zone="Asia/Taipei" \
+  --uri="https://prepare-xxxxxx.asia-east1.run.app" \
+  --http-method=POST \
+  --headers="Content-Type=application/json,User-Agent=Google-Cloud-Scheduler" \
+  --message-body='{"batch_size": 10}' \
+  --location=asia-east1
+
+  gcloud scheduler jobs create http trigger-twse-crawler \
+  --schedule="0 17 * * 1-5" \
+  --time-zone="Asia/Taipei" \
+  --uri="https://trigger-run-job-799912987769.asia-east1.run.app" \
+  --http-method=POST \
+  --location=asia-east1
