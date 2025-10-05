@@ -13,4 +13,4 @@ export DISPLAY=:99
 # glxinfo | grep "OpenGL" || echo "No OpenGL info"
 
 # 執行 Python 爬蟲
-python Crawler_TPEXBuySellReport.py "$@"
+python crawler-tpex-bsreport.py "$@"

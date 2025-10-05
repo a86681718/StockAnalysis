@@ -28,7 +28,7 @@ COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 複製 Python 檔案
-COPY Crawler_TPEXBuySellReport.py /app/Crawler_TPEXBuySellReport.py
+COPY crawler-tpex-bsreport.py /app/crawler-tpex-bsreport.py
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 ENTRYPOINT ["/app/entrypoint.sh"]

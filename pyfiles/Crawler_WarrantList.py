@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 session = requests.session()
 init_url = "https://mopsov.twse.com.tw/mops/web/t90sbfa01"
 header = {"Content-Type": "application/x-www-form-urlencoded"}
-output_path = '../data/'
+output_path = '/data/'
 warrant_info_list = []
 header = []
 for marketType in ["1", "2"]:

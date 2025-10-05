@@ -26,8 +26,9 @@ RUN mkdir -p data/bs_data
 RUN mkdir img
 
 # Copy the rest of the application code
-COPY Crawler_TWSEBuySellReport.py /app/pyfiles/Crawler_TWSEBuySellReport.py
+COPY crawler-twse-bsreport-new.py /app/pyfiles/crawler-twse-bsreport.py
 COPY twse_cnn_model.hdf5 /app/data/twse_cnn_model.hdf5
 
-# Define the command to run the application
-CMD ["python", "pyfiles/Crawler_TWSEBuySellReport.py"]
+# Define the entrypoint so runtime arguments are passed to the crawler
+ENTRYPOINT ["python", "pyfiles/crawler-twse-bsreport.py"]
+CMD []

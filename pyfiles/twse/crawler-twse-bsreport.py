@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from keras.models import load_model
 from bs4 import BeautifulSoup
 from google.cloud import storage
+import time
 
 # Suppress SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -85,47 +86,65 @@ def solve_captcha(source_img_path, model):
     return one_hot_decoding(prediction, ALLOWED_CHARS)
 
 # Main functions
-def get_stock_list(dt):
+def get_stock_list(dt, retries=3, delay=2):
     logging.info(f"Fetch the stock list for a given date: {dt}")
     """Fetch the stock list for a given date."""
     etf_url = f'https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date={dt}&type=0099P&response=json'
     all_stocks_url = f'https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date={dt}&type=ALLBUT0999&response=json'
 
-    etf_pdf = parse_table(fetch_json(etf_url))
-    if etf_pdf is None:
-        logging.warning(f"Failed to fetch ETF data for date: {dt}")
-        return []
+    for attempt in range(1, retries + 1):
+        try:
+            etf_pdf = parse_table(fetch_json(etf_url))
+            if etf_pdf is None:
+                logging.warning(f"Failed to fetch ETF data for date: {dt}")
+                continue
 
-    etf_list = etf_pdf['證券代號'].to_list()
+            etf_list = etf_pdf['證券代號'].to_list()
 
-    all_stocks_pdf = parse_table(fetch_json(all_stocks_url))
-    if all_stocks_pdf is None:
-        logging.warning(f"Failed to fetch stock data for date: {dt}")
-        return []
+            all_stocks_pdf = parse_table(fetch_json(all_stocks_url))
+            if all_stocks_pdf is None:
+                logging.warning(f"Failed to fetch stock data for date: {dt}")
+                continue
 
-    all_stocks_pdf = all_stocks_pdf[all_stocks_pdf['成交筆數'] != 0]
-    all_stocks_pdf = all_stocks_pdf[~all_stocks_pdf['證券代號'].isin(etf_list)]
-    return all_stocks_pdf[all_stocks_pdf['證券代號'].str.len() == 4]['證券代號'].to_list()
+            all_stocks_pdf = all_stocks_pdf[all_stocks_pdf['成交筆數'] != 0]
+            all_stocks_pdf = all_stocks_pdf[~all_stocks_pdf['證券代號'].isin(etf_list)]
+            return all_stocks_pdf[all_stocks_pdf['證券代號'].str.len() == 4]['證券代號'].to_list()
+        except Exception as e:
+            logging.warning(f"[Attempt {attempt}] Failed to fetch stock list: {e}")
+            if attempt < retries:
+                time.sleep(delay)
+            else:
+                logging.error(f"All {retries} attempts to fetch stock list failed.")
+                return []
 
-def get_warrant_list(dt):
+def get_warrant_list(dt, retries=3, delay=2):
     logging.info(f"Fetch the warrant list for a given date: {dt}")
     """Fetch the warrant list for a given date."""
     warrant_types = ['0999', '0999P']
     pdf_list = []
 
-    for w_type in warrant_types:
-        url = f'https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date={dt}&type={w_type}&response=json'
-        pdf = parse_table(fetch_json(url))
-        if pdf is not None:
-            pdf['成交股數'] = pd.to_numeric(pdf['成交股數'].str.replace(',', ''), errors='coerce')
-            pdf['成交筆數'] = pd.to_numeric(pdf['成交筆數'].str.replace(',', ''), errors='coerce')
-            pdf = pdf[pdf['成交筆數'] != 0]
-            pdf_list.append(pdf)
+    for attempt in range(1, retries + 1):
+        try:
+            for w_type in warrant_types:
+                url = f'https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date={dt}&type={w_type}&response=json'
+                pdf = parse_table(fetch_json(url))
+                if pdf is not None:
+                    pdf['成交股數'] = pd.to_numeric(pdf['成交股數'].str.replace(',', ''), errors='coerce')
+                    pdf['成交筆數'] = pd.to_numeric(pdf['成交筆數'].str.replace(',', ''), errors='coerce')
+                    pdf = pdf[pdf['成交筆數'] != 0]
+                    pdf_list.append(pdf)
 
-    if pdf_list:
-        concat_pdf = pd.concat(pdf_list, axis=0).sort_values('成交股數', ascending=False)
-        return concat_pdf[concat_pdf['成交筆數'] != 0]['證券代號'].to_list()
-    return []
+            if pdf_list:
+                concat_pdf = pd.concat(pdf_list, axis=0).sort_values('成交股數', ascending=False)
+                return concat_pdf[concat_pdf['成交筆數'] != 0]['證券代號'].to_list()
+            return []
+        except Exception as e:
+            logging.warning(f"[Attempt {attempt}] Failed to fetch warrant list: {e}")
+            if attempt < retries:
+                time.sleep(delay)
+            else:
+                logging.error(f"All {retries} attempts to fetch warrant list failed.")
+                return []
 
 def crawl_data(stock_list, model, data_dt):
     """Crawl data for the given stock list."""  
