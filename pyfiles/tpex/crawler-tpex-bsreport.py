@@ -17,6 +17,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Logging configuration
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
+BUCKET_NAME = os.environ.get('STOCK_CRAWLER_BUCKET', 'stock-crawler-bucket-20250908')
 MANIFEST_CONTENT = {
     "manifest_version": 3,
     "name": "Turnstile Patcher",
@@ -226,7 +227,7 @@ def main():
 
         # Check if the symbol document exists in Firestore
         try:
-            collection_name = f"crawl_status_{data_dt}"
+            collection_name = f"tpex_crawl_status_{data_dt}"
             doc_ref = fs_client.collection(collection_name).document(symbol)
             doc = doc_ref.get()
             if not doc.exists:
@@ -265,9 +266,8 @@ def main():
         if success:
             if os.path.exists(output_path):
                 # Upload to Google Cloud Storage
-                bucket_name = 'stock-crawler-bucket-20250908'
-                gcs_blob_name = f'bs_report/{data_dt}/{symbol}.csv'
-                upload_to_gcs(bucket_name, output_path, gcs_blob_name)
+                gcs_blob_name = f'bs_report/tpex/{data_dt}/{symbol}.csv'
+                upload_to_gcs(BUCKET_NAME, output_path, gcs_blob_name)
 
             # Delete the symbol document from Firestore
             try:

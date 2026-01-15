@@ -1,0 +1,12 @@
+gcloud run deploy trigger-twse-job \
+  --source /Users/fang/StockAnalysis/deployment/trigger-twse-job \
+  --region asia-east1 \
+  --cpu 1 \
+  --memory 512Mi \
+  --concurrency 80 \
+  --timeout 300 \
+  --min-instances 0 \
+  --max-instances 20 \
+  --ingress all \
+  --cpu-boost \
+  --quiet

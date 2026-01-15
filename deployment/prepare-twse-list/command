@@ -1,0 +1,14 @@
+PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='get(projectNumber)')
+gcloud run deploy prepare-twse-list \
+  --source /Users/fang/StockAnalysis/deployment/prepare-twse-list \
+  --region asia-east1 \
+  --cpu 2 \
+  --memory 8Gi \
+  --concurrency 5 \
+  --timeout 3600 \
+  --min-instances 0 \
+  --max-instances 5 \
+  --set-env-vars "QUEUE_NAME=twse-crawl-queue,FUNCTION_URL=https://trigger-twse-job-$PROJECT_NUMBER.asia-east1.run.app" \
+  --ingress all \
+  --cpu-boost \
+  --quiet

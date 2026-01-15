@@ -1,0 +1,12 @@
+gcloud run deploy trigger-run-job \
+  --source /Users/fang/StockAnalysis/deployment/trigger-tpex-job \
+  --region asia-east1 \
+  --cpu 1 \
+  --memory 512Mi \
+  --concurrency 80 \
+  --timeout 300 \
+  --min-instances 0 \
+  --max-instances 10 \
+  --ingress all \
+  --cpu-boost \
+  --quiet

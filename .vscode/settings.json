@@ -112,10 +112,13 @@
     "github.copilot.chat.agent.runTasks": true,
     "github.copilot.chat.codesearch.enabled": true,
     "github.copilot.chat.newWorkspaceCreation.enabled": true,
-    "terminal.integrated.scrollback": 50000, // Agent Mode 建議調高預設 Terminal 的捲軸行數
-
-    "chat.mcp.enabled": true,
-    "chat.mcp.discovery.enabled": false,
+    "terminal.integrated.scrollback": 50000,
+    "chat.mcp.discovery.enabled": {
+        "claude-desktop": false,
+        "windsurf": false,
+        "cursor-global": false,
+        "cursor-workspace": false
+    },
     // "chat.mcp.discovery.enabled": {
     //     "claude-desktop": false,
     //     "windsurf": false,
@@ -136,5 +139,6 @@
     "accessibility.voice.ignoreCodeBlocks": true,
 
     // Live Preview
-    "livePreview.autoRefreshPreview": "On Changes to Saved Files"
+    "livePreview.autoRefreshPreview": "On Changes to Saved Files",
+    "chat.mcp.access": "all"
 }

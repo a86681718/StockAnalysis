@@ -16,7 +16,7 @@ def get_project_id():
 # 設定專案資訊
 PROJECT_ID = get_project_id()
 LOCATION = os.getenv("LOCATION", "asia-east1")
-JOB_NAME = os.getenv("JOB_NAME", "twse-crawler")
+JOB_NAME = os.getenv("JOB_NAME", "tpex-crawler")
 
 firestore_client = firestore.Client()
 run_client = run_v2.JobsClient()
@@ -56,7 +56,7 @@ def trigger_run_job(request: Request):
         logging.info(f"date: {dt}")
         # Firestore 更新狀態為 running
         dt = dt.replace("/", "")
-        collection_name = f"twse_crawl_status_{dt}"
+        collection_name = f"tpex_crawl_status_{dt}"
         skip_symbols = []
         for symbol in symbols:
             doc_ref = firestore_client.collection(collection_name).document(symbol)
