@@ -1,5 +1,5 @@
 gcloud run deploy trigger-twse-job \
-  --source /Users/fang/StockAnalysis/deployment/trigger-twse-job \
+  --source ./deployment/trigger-twse-job \
   --region asia-east1 \
   --cpu 1 \
   --memory 512Mi \

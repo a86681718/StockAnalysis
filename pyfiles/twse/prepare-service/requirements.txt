@@ -1,6 +1,0 @@
-google-cloud-firestore
-google-cloud-tasks
-protobuf
-flask
-pandas
-requests

@@ -1,6 +1,6 @@
 
 gcloud run deploy prepare-tpex-list \
-  --source /Users/ttfang/Documents/StockAnalysis/deployment/prepare-tpex-list \
+  --source ./deployment/prepare-tpex-list \
   --region asia-east1 \
   --memory 512Mi \
   --cpu 1 \

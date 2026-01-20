@@ -1,6 +1,6 @@
 PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='get(projectNumber)')
 gcloud run deploy prepare-twse-list \
-  --source /Users/fang/StockAnalysis/deployment/prepare-twse-list \
+  --source ./deployment/prepare-twse-list \
   --region asia-east1 \
   --cpu 2 \
   --memory 8Gi \
