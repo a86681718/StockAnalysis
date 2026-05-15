@@ -192,14 +192,14 @@ def download_captcha(session: requests.Session, url: str, destination: str) -> N
         shutil.copyfileobj(response.raw, file_handle)
 
 
-def read_twse_report(csv_text: str) -> pd.DataFrame:
+def read_twse_report(csv_text: str, data_dt: str) -> pd.DataFrame:
     raw_df = pd.read_csv(StringIO(csv_text), sep=',', skiprows=2)
     first_half = raw_df.iloc[:, :5]
     second_half = raw_df.iloc[:, 6:]
     second_half.columns = first_half.columns
     merged = pd.concat([first_half, second_half], axis=0).sort_values('序號')
     merged['券商'] = merged['券商'].str[:4]
-    merged['日期'] = datetime.now().strftime('%Y/%m/%d')
+    merged['日期'] = datetime.strptime(data_dt, '%Y%m%d').strftime('%Y/%m/%d')
     return merged.drop(columns=['序號'])
 
 
@@ -407,7 +407,7 @@ def crawl_data(stock_code: str, model, data_dt: str, paths: CrawlerPaths, max_re
                 logging.warning("Failed to load %s: %s", BS_CONTENT_ENDPOINT, exc)
                 continue
 
-            report_df = read_twse_report(bs_report.text)
+            report_df = read_twse_report(bs_report.text, data_dt)
             output_path = paths.report_path(stock_code)
             save_report(report_df, output_path)
             logging.info("Successfully crawled data for stock: %s", stock_code)
