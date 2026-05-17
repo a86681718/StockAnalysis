@@ -20,18 +20,20 @@ README 的目標不是完整列出每支腳本，而是讓你先在 3 分鐘內�
 
 ```text
 StockAnalysis/
-├── src/stockanalysis/      # 共用 library、路徑設定、分析模組
+├── src/stockanalysis/      # 共用 library、路徑設定、分析模組、runtime crawler 實作
 ├── apps/
 │   ├── crawlers/           # 通用 crawler 腳本
-│   ├── twse/               # TWSE crawler 與 container / cloudbuild 設定
-│   ├── tpex/               # TPEX crawler 與 container / cloudbuild 設定
+│   ├── twse/               # TWSE wrapper、container 與 cloudbuild 設定
+│   ├── tpex/               # TPEX wrapper、container 與 cloudbuild 設定
 │   ├── etl/                # ETL 腳本
 │   ├── analysis/           # 研究型分析與回測腳本
 │   ├── visualization/      # Dash app
-│   └── services/           # 任務準備 / 觸發服務
-├── deployment/             # Cloud Run / scheduler 類部署入口
-├── data/                   # 本地資料區
-├── outputs/                # 產出圖表、報表、暫存分析結果
+│   └── services/           # 其他本地輔助服務
+├── deployment/             # 正式 Cloud Run 部署入口
+├── docs/                   # 架構與維護文件
+├── legacy/                 # 已退出主流程但保留的舊服務/舊結構
+├── data/                   # 相容性預設資料區，正式使用建議改由環境變數指到 repo 外
+├── outputs/                # 相容性預設輸出區
 ├── notebooks/              # 探索式 notebook
 ├── conf/                   # 路徑與環境設定
 ├── assets/                 # 模型與靜態資產
@@ -46,11 +48,13 @@ StockAnalysis/
    先看 Python 版本、依賴與 workspace 設定。
 2. `src/stockanalysis/config.py`
    先理解專案怎麼找 `data/`、`outputs/`、`assets/`。
-3. `apps/`
-   再看可執行腳本分布，這裡是實際工作的主要入口。
-4. `apps/visualization/app.py`
+3. `deployment/`
+   這是目前正式 GCP 流程的入口。
+4. `docs/project-structure.md`
+   先看目前建議的主幹結構與 data path policy。
+5. `apps/visualization/app.py`
    這支可以快速看出目前分析結果最後怎麼被使用。
-5. `apps/analysis/` 與 `src/stockanalysis/analysis/`
+6. `apps/analysis/` 與 `src/stockanalysis/analysis/`
    前者偏研究腳本與批次執行，後者偏可重用分析模組。
 
 ## Directory Guide
@@ -79,14 +83,13 @@ StockAnalysis/
 
 ### `apps/twse/` 與 `apps/tpex/`
 
-偏向市場別切分的 crawler 與部署包。
+偏向市場別切分的 crawler wrapper 與 build 包。
 
 - `crawler-*-bsreport.py`: 券商買賣超明細
 - `crawler-*-daily-ohlc.py`: 日 OHLC
 - `Dockerfile`, `cloudbuild.yaml`, `requirements.txt`: 容器化與雲端建置
-- `prepare-service/`, `trigger-service/`: 供排程或任務切分使用
 
-如果你想理解正式日常爬蟲流程，這兩個資料夾最重要。
+目前正式 GCP service 入口不在這裡，而是在 `deployment/`。
 
 ### `apps/etl/`
 
@@ -122,9 +125,15 @@ Dash 視覺化入口。
 
 ### `deployment/`
 
-獨立部署入口，對應準備任務與觸發任務的雲端執行。
+正式 Cloud Run 部署入口，對應準備任務與觸發任務的雲端執行。
 
 如果要調整 Cloud Run / Scheduler 相關流程，從這裡看比直接翻 `commands` 更清楚。
+
+### `legacy/`
+
+已不再是主流程入口、但暫時保留的舊服務結構。
+
+這一層的目的是把歷史殘留從主幹挪開，不讓正式結構繼續膨脹。
 
 ### `notebooks/`
 
@@ -183,14 +192,6 @@ crawler -> raw csv / parquet -> ETL -> data/_derived -> analysis -> outputs / da
 uv sync
 ```
 
-如果你只想跑主專案腳本，先確認以下目錄存在：
-
-```bash
-data/
-outputs/
-assets/
-```
-
 必要時可用環境變數覆蓋：
 
 - `STOCKANALYSIS_ROOT`
@@ -199,14 +200,22 @@ assets/
 - `STOCKANALYSIS_ASSETS_DIR`
 - `STOCKANALYSIS_CONF_DIR`
 
+正式使用建議把 `data/` 與 `outputs/` 放在 repo 之外，例如：
+
+```bash
+export STOCKANALYSIS_DATA_DIR=/path/to/stockanalysis-data
+export STOCKANALYSIS_OUTPUT_DIR=/path/to/stockanalysis-outputs
+```
+
 ## Current Structure Assessment
 
 目前結構整體上是合理的，但有幾個明顯特徵需要記住：
 
-- `apps/` 是主工作區，責任切分大致正確
-- `src/stockanalysis/` 是較穩定的共用層
+- `deployment/` 是正式 GCP 主流程入口
+- `src/stockanalysis/` 是較穩定的共用層與 runtime 實作層
+- `apps/twse`、`apps/tpex` 已收斂為 wrapper + build 設定
 - `notebooks/` 與 `apps/analysis/` 都承載研究歷史，命名與成熟度不完全一致
-- `data/`、`outputs/` 在這個 repo 中不是附屬品，而是實際工作流的一部分
+- `data/`、`outputs/` 仍保留相容性預設值，但長期建議移到 repo 外
 
 換句話說，這個專案比較像「研究與生產並存的資料工作台」，不是純乾淨封裝的 library。
 
@@ -215,7 +224,9 @@ assets/
 如果之後要繼續整理，建議遵守這個邊界：
 
 - 新的共用邏輯放 `src/stockanalysis/`
-- 新的可執行任務放 `apps/`
+- 新的 GCP service 放 `deployment/`
+- 新的 crawler 實作放 `src/stockanalysis/runtime/crawlers/`
+- `apps/twse`、`apps/tpex` 只保留 wrapper 與 build 相關檔案
 - 臨時探索放 `notebooks/`
 - 中介資料放 `data/_derived/`
 - 對外輸出放 `outputs/`
@@ -233,7 +244,7 @@ assets/
 這個專案最值得先掌握的不是每一支腳本，而是 3 個核心觀念：
 
 1. `apps/` 負責執行任務
-2. `src/stockanalysis/` 負責共用能力
-3. `data/` 與 `outputs/` 是分析流程本體的一部分
+2. `deployment/` 負責正式 GCP 流程
+3. `src/stockanalysis/` 負責共用能力與可重用 runtime
 
 掌握這三點後，再往特定 crawler、ETL 或分析腳本深入，理解成本會低很多。
