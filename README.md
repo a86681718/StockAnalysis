@@ -52,9 +52,11 @@ StockAnalysis/
    這是目前正式 GCP 流程的入口。
 4. `docs/project-structure.md`
    先看目前建議的主幹結構與 data path policy。
-5. `apps/visualization/app.py`
+5. `docs/gcp-bootstrap.md`
+   如果要在新 GCP project 重建目前的部署環境，先看這份。
+6. `apps/visualization/app.py`
    這支可以快速看出目前分析結果最後怎麼被使用。
-6. `apps/analysis/` 與 `src/stockanalysis/analysis/`
+7. `apps/analysis/` 與 `src/stockanalysis/analysis/`
    前者偏研究腳本與批次執行，後者偏可重用分析模組。
 
 ## Directory Guide
