@@ -15,8 +15,8 @@ import threading
 
 from stockanalysis.config import ensure_dir, resolve_data
 
-INPUT_DIR = resolve_data("bs_report", "twse")  # 放每日資料夾的根目錄
-OUTPUT_DIR = ensure_dir(resolve_data("bs_report", "parquet_twse"))  # 轉換後的輸出位置
+INPUT_DIR = resolve_data("bs_report", "tpex")  # 放每日資料夾的根目錄
+OUTPUT_DIR = ensure_dir(resolve_data("bs_report", "parquet_tpex"))  # 轉換後的輸出位置
 
 file_locks = {}
 file_locks_lock = threading.Lock()

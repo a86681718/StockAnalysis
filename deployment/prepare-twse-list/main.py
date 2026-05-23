@@ -8,6 +8,7 @@ from flask import Request, request, jsonify
 import pandas as pd
 import logging
 import requests
+import urllib3
 
 
 class TwseSecurityBlockError(RuntimeError):
@@ -31,6 +32,7 @@ PROJECT_ID = get_project_id()
 QUEUE_NAME = os.environ.get("QUEUE_NAME")  # 你事先建立的 Queue 名稱
 LOCATION = os.environ.get("LOCATION", "asia-east1")
 FUNCTION_URL = os.environ.get("FUNCTION_URL")  # Cloud Function B 的 URL
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 client = firestore.Client()
 tasks_client = tasks_v2.CloudTasksClient()
@@ -58,7 +60,7 @@ def fetch_json(url, retries=3, delay=2):
                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"}
     for attempt in range(1, retries + 1):
         try:
-            resp = requests.get(url, headers=headers, timeout=10, verify=False)
+            resp = requests.get(url, headers=headers, timeout=600, verify=False)
             resp.raise_for_status()
             body_text = resp.content.decode('utf8', errors='ignore')
             if any(marker in body_text for marker in SECURITY_BLOCK_MARKERS):

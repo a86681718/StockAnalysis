@@ -52,19 +52,12 @@ else:
 
 data_path = conf.get('data.path')
 ohlc_subfolder = 'ohlc'
-warrant_subfolder = 'warrant'
-common_subfolder = 'common'
 stock_output_path = data_path + os.sep + ohlc_subfolder
-warrant_output_path = data_path + os.sep + warrant_subfolder
 
 print(f"stock_output_path: {stock_output_path}")
-print(f"warrant_output_path: {warrant_output_path}")
 
 if not os.path.exists(stock_output_path):
     os.makedirs(stock_output_path, exist_ok=True)
-
-if not os.path.exists(warrant_output_path):
-    os.makedirs(warrant_output_path, exist_ok=True)
 
 dt = datetime.strptime(start_dt, '%Y/%m/%d')
 end_dt = datetime.strptime(end_dt, '%Y/%m/%d')
@@ -76,7 +69,6 @@ tpex_header = ['股票代號', '名稱', '收盤價', '漲跌價差', '開盤價
 header_list = ['股票代號', '成交股數', '成交金額', '開盤價', '最高價', '最低價', '收盤價', '漲跌價差', '成交筆數']
 header_str = '股票代號,日期,成交股數,成交金額,開盤價,最高價,最低價,收盤價,漲跌價差,漲跌幅,成交筆數\n'
 
-warrant_df = pd.read_csv(data_path + os.sep + common_subfolder + os.sep + 'warrantList.csv')
 while dt <= end_dt:
     if dt.weekday() in range(0, 5):
         print(dt.strftime('%Y/%m/%d'))
@@ -85,20 +77,13 @@ while dt <= end_dt:
         roc_dt = toRocYear(dt.strftime('%Y/%m/%d'))
         tpex_resp = requests.get(tpex_url % roc_dt)
         json_obj = json.loads(tpex_resp.text)
-        json_data = json_obj['aaData']
+        json_data = json_obj['tables'][0]['data']
+        tpex_header = json_obj['tables'][0]['fields']
         tpex_pdf = pd.DataFrame(json_data, columns=tpex_header)
         
         #for stock
         tpex_stock_pdf = tpex_pdf[tpex_pdf['股票代號'].str.len() == 4]
         tpex_stock_pdf = tpex_stock_pdf[header_list]
-        
-        #for warrant
-        tpex_warrant_pdf = tpex_pdf.copy().rename(columns={"股票代號": "權證代號"})
-        tpex_warrant_pdf = strToFloat(tpex_warrant_pdf, ['收盤價', '開盤價', '漲跌價差', '最高價', '最低價', '成交股數', '成交金額', '成交筆數'])
-        tpex_warrant_pdf = pd.merge(tpex_warrant_pdf, warrant_df, on='權證代號')
-        tpex_warrant_pdf = tpex_warrant_pdf[tpex_warrant_pdf['成交股數']>0].sort_values('成交金額', ascending=False)
-        tpex_warrant_file_name = 'warrant_tpex_order_' + dt.strftime('%Y-%m-%d') + '.csv'
-        tpex_warrant_pdf[['權證代號']].to_csv(warrant_output_path + os.sep + tpex_warrant_file_name , index=False)
         
         # ---------- TWSE ----------
         twse_resp = requests.get(twse_url % dt.strftime('%Y%m%d'))
@@ -112,13 +97,6 @@ while dt <= end_dt:
             twse_stock_pdf = twse_stock_pdf.rename(columns={'證券代號':'股票代號', '證券名稱':'名稱'})
             twse_stock_pdf = twse_stock_pdf[header_list]
             
-            # for warrant
-            twse_warrant_pdf = twse_pdf.copy().rename(columns={"證券代號": "權證代號"})
-            twse_warrant_pdf = strToFloat(twse_warrant_pdf, ['收盤價', '開盤價', '漲跌價差', '最高價', '最低價', '成交股數', '成交金額', '成交筆數'])
-            twse_warrant_pdf = pd.merge(twse_warrant_pdf, warrant_df, on='權證代號')
-            twse_warrant_pdf = twse_warrant_pdf[twse_warrant_pdf['成交股數']>0].sort_values('成交金額', ascending=False)
-            twse_warrant_file_name = 'warrant_twse_order_' + dt.strftime('%Y-%m-%d') + '.csv'
-            twse_warrant_pdf[['權證代號']].to_csv(warrant_output_path + os.sep + twse_warrant_file_name, index=False)
         else:
             dt = dt + timedelta(days=1)
             sleep(randint(3, 5))

@@ -87,11 +87,11 @@ def trigger_run_job(request: Request):
         logging.info(f"[{symbols}] Start to run job ")
 
         # 執行 Job
-        response = run_client.run_job(request=run_request)
-        result = str(response.result()).replace('\n', '')
-        logging.info(f"Run job response: {result}")
+        operation = run_client.run_job(request=run_request)
+        job_id = operation.operation.name 
+        logging.info(f"[{symbols}] Job triggered successfully. Operation: {job_id}")
 
-        return f"Job triggered for symbols: {symbols}", 200
+        return f"Job triggered for symbols: {symbols}. Operation ID: {job_id}", 200
 
     except Exception as e:
         logging.error(f"[{symbol}] Exception occurred: {str(e)}", exc_info=True)

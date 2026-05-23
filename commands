@@ -1,4 +1,5 @@
-gcloud builds submit --config apps/twse/cloudbuild.yaml --substitutions=_IMAGE_URI=asia-east1-docker.pkg.dev/bionic-region-455813-b0/my-repo/twse-crawler:0.0.2 .
+
+gcloud builds submit --config apps/twse/cloudbuild.yaml --substitutions=_IMAGE_URI=asia-east1-docker.pkg.dev/$PROJECT_ID/my-repo/twse-crawler:0.0.2 .
 poetry export -f requirements.txt --output requirements.txt --without-hashes
 docker build -t stockanalysis:0.0.3 .
 
@@ -15,23 +16,35 @@ gcloud auth configure-docker asia-east1-docker.pkg.dev
 docker build -f apps/twse/Dockerfile -t asia-east1-docker.pkg.dev/bionic-region-455813-b0/my-repo/twse-crawler:1.0.0 .
 docker push asia-east1-docker.pkg.dev/bionic-region-455813-b0/my-repo/twse-crawler:1.0.0
 
+
+cd ./apps/twse
 gcloud builds submit --config apps/tpex/cloudbuild.yaml --substitutions=_IMAGE_URI=asia-east1-docker.pkg.dev/silent-eye-462713-m1/my-repo/tpex-crawler:0.0.2 .
+cd ./apps/tpex
 gcloud builds submit --config apps/tpex/cloudbuild.yaml --substitutions=_IMAGE_URI=asia-east1-docker.pkg.dev/$PROJECT_ID/my-repo/tpex-crawler:1.0.0 .
 
 gcloud builds submit --config apps/twse/cloudbuild.yaml --substitutions=_IMAGE_URI=asia-east1-docker.pkg.dev/$PROJECT_ID/my-repo/twse-crawler:20251201 .
+
+
+gcloud storage rsync -r gs://stock-crawler-bucket-20260302/bs_report/tpex/ /Users/ttfang/Documents/workspace/StockAnalysis/data/bs_report/tpex/
+gcloud storage rsync -r gs://stock-crawler-bucket-20260302/bs_report/twse/ /Users/ttfang/Documents/workspace/StockAnalysis/data/bs_report/twse/
 
 ===
 silent-eye-462713-m1
 
 gcloud auth login
-export PROJECT_ID="tribal-union-479714-u8"
+export PROJECT_ID="project-f1177eeb-a19a-4c9a-8bf"
 export PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='get(projectNumber)')
 gcloud config set project $PROJECT_ID
 gcloud services enable artifactregistry.googleapis.com # 啟用 Artifact Registry API
 gcloud auth configure-docker asia-east1-docker.pkg.dev
 
+# 
+gcloud iam service-accounts create compute \
+    --description="automation" \
+    --display-name="compute"
+
 # grant permissions of accessing GCS bucket to the default service account
-gcloud projects add-iam-policy-binding $PROJECT_ID --member="serviceAccount:$PROJECT_NUMBER-compute@developer.gserviceaccount.com"   --role="roles/storage.objectAdmin"
+gcloud projects add-iam-policy-binding $PROJECT_ID --member="serviceAccount:compute@$PROJECT_ID.iam.gserviceaccount.com"   --role="roles/storage.objectAdmin"
 
 gcloud services enable cloudbuild.googleapis.com --project $PROJECT_ID
 
@@ -77,13 +90,13 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
   --quiet
 
 gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:$PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
+  --member="serviceAccount:compute@$PROJECT_ID.iam.gserviceaccount.com" \
   --role='roles/run.invoker' \
   --quiet
 
  gcloud artifacts repositories add-iam-policy-binding my-repo \
   --location=asia-east1 \
-  --member="serviceAccount:$PROJECT_ID@cloudbuild.gserviceaccount.com" \
+  --member="serviceAccount:compute@$PROJECT_ID.iam.gserviceaccount.com" \
   --role='roles/artifactregistry.writer'
 
 # 啟用 cloud run
@@ -125,6 +138,9 @@ gcloud scheduler jobs create http prepare-tpex-crawler \
   --headers="Content-Type=application/json,User-Agent=Google-Cloud-Scheduler" \
   --message-body='{"batch_size": 10}' \
   --location=asia-east1 \
+  --oidc-service-account-email="$PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
+  --oidc-token-audience="https://prepare-twse-list-$PROJECT_NUMBER.asia-east1.run.app" \
+  --attempt-deadline="15m" \
   --quiet
 
   gcloud scheduler jobs create http prepare-twse-crawler \

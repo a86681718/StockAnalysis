@@ -1,0 +1,10 @@
+{
+  "th": 0.98,
+  "cooldown": 10,
+  "tp": 0.08,
+  "sl": -0.09,
+  "tie_break": "sl_first",
+  "plot_horizon": 10,
+  "topn_plot": 20,
+  "plot_window_days": 15
+}

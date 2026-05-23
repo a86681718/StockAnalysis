@@ -1,0 +1,26 @@
+# Keep Cloud Build upload context small.
+
+# VCS
+.git
+.gitignore
+
+# Local Python environments and caches
+.venv/
+venv/
+env/
+**/__pycache__/
+**/*.py[cod]
+
+# Local/editor files
+.vscode/
+.DS_Store
+**/.DS_Store
+
+# Large local outputs/datasets
+data/
+outputs/
+notebooks/
+
+# Temporary/log artifacts
+*.log
+*.tmp

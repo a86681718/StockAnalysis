@@ -98,7 +98,8 @@ def write_parquet_incremental(stock_id, df):
             traceback.print_exc()
 
 # === 主程式 ===
-zip_files = sorted(ZIP_DIR.glob("bs_report_*.zip"))
+print(ZIP_DIR)
+zip_files = sorted(ZIP_DIR.glob("*.zip"))
 print(f"共找到 {len(zip_files)} 個 ZIP，開始並行處理...")
 
 with ThreadPoolExecutor(max_workers=6) as executor:

@@ -1,0 +1,6 @@
+{
+  "score_lookback": 60,
+  "score_minp": 20,
+  "th": 0.95,
+  "cooldown": 5
+}
