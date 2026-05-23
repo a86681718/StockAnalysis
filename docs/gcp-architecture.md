@@ -78,11 +78,11 @@ stateDiagram-v2
 
 ```mermaid
 flowchart LR
-    gcs[(GCS bucket<br/>bs_report/twse|tpex/yyyyMMdd/*.csv)]
+    gcs[(GCS bucket<br/>bs_report/twse/yyyyMMdd/*.csv<br/>bs_report/tpex/yyyyMMdd/*.csv)]
     rsync[gcloud storage rsync]
-    rawBs[Local raw bs_report folders<br/>data/bs_report/twse|tpex/yyyyMMdd]
+    rawBs[Local raw bs_report folders<br/>data/bs_report/twse/yyyyMMdd<br/>data/bs_report/tpex/yyyyMMdd]
     etl[ETL scripts<br/>apps/etl]
-    brokerParquet[(Broker parquet<br/>data/bs_report/parquet_twse|parquet_tpex)]
+    brokerParquet[(Broker parquet<br/>data/bs_report/parquet_twse<br/>data/bs_report/parquet_tpex)]
 
     ohlcCsv[Local OHLC CSV<br/>data/ohlc/twse-yyyymmdd.csv<br/>data/ohlc/tpex-yyyymmdd.csv]
     brokerList[Broker list CSV<br/>data/broker_list.csv]
