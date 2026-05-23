@@ -59,3 +59,42 @@ flowchart TD
 - `deployment/` is the primary source of the production GCP services.
 - Firestore is used as the per-day crawl status store for symbol batches.
 - GCS is the handoff point between GCP crawlers and local ETL / analysis.
+
+## Firestore Status Flow
+
+```mermaid
+stateDiagram-v2
+    [*] --> initialized
+    initialized --> pending: prepare-* initializes symbol docs
+    pending --> running: trigger-* dispatches batch
+    running --> completed: crawler uploads csv and deletes doc
+    running --> pending: retry / rerun path
+    pending --> skipped: symbol missing or filtered out
+    completed --> [*]
+    skipped --> [*]
+```
+
+## Local Data Flow
+
+```mermaid
+flowchart LR
+    gcs[(GCS bucket<br/>bs_report/twse|tpex/yyyyMMdd/*.csv)]
+    rsync[gcloud storage rsync]
+    raw[Raw local folders<br/>bs_report/twse|tpex/yyyyMMdd]
+    etl[ETL scripts<br/>apps/etl]
+    parquet[(Parquet outputs<br/>bs_report/parquet_twse|tpex)]
+    derived[(Derived datasets<br/>data/_derived)]
+    analysis[Analysis scripts<br/>apps/analysis and src/stockanalysis/analysis]
+    viz[Dash visualization<br/>apps/visualization/app.py]
+    reports[Outputs<br/>HTML / PNG / CSV]
+
+    gcs --> rsync
+    rsync --> raw
+    raw --> etl
+    etl --> parquet
+    parquet --> analysis
+    parquet --> viz
+    analysis --> derived
+    derived --> viz
+    analysis --> reports
+```
