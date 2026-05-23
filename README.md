@@ -109,6 +109,7 @@ StockAnalysis/
 - `make_event_report.py`, `make_ml_predictions_report.py`: 輸出報表
 
 這層不是低耦合 library，而是「可以直接跑的研究腳本集合」。
+目前設定檔已集中到 `apps/analysis/configs/`，報表生成腳本實體則在 `apps/analysis/reports/`。
 
 ### `apps/visualization/`
 

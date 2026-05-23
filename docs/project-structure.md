@@ -22,6 +22,8 @@ apps/
   twse/
   tpex/
   analysis/
+    configs/
+    reports/
   etl/
   visualization/
 
@@ -40,6 +42,10 @@ legacy/
   - actual crawler implementations used by local wrappers and containers
 - `apps/twse/` and `apps/tpex/`
   - thin runnable wrappers plus Docker and Cloud Build files
+- `apps/analysis/configs/`
+  - shared analysis JSON configs and parameter presets
+- `apps/analysis/reports/`
+  - report-generation scripts, with compatibility wrappers kept at the analysis root
 - `legacy/`
   - non-primary service layouts preserved for reference
 
