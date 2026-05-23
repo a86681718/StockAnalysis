@@ -95,7 +95,8 @@ StockAnalysis/
 
 將原始資料轉成分析可用格式，例如 parquet 或壓縮整理。
 
-目前內容看起來還混有實驗檔與舊腳本，但責任很明確：資料整理層。
+目前 `bs_report` 的正式本地入口已收斂到 `apps/etl/run_bs_report_etl.py`，
+支援 `sync -> process -> archive -> manifest` 流程。
 
 ### `apps/analysis/`
 

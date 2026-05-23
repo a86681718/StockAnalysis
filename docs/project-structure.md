@@ -25,6 +25,8 @@ apps/
     configs/
     reports/
   etl/
+    run_bs_report_etl.py
+    bs_report_pipeline.py
   visualization/
 
 legacy/
@@ -46,6 +48,8 @@ legacy/
   - shared analysis JSON configs and parameter presets
 - `apps/analysis/reports/`
   - report-generation scripts, with compatibility wrappers kept at the analysis root
+- `apps/etl/run_bs_report_etl.py`
+  - main local bs-report ETL orchestration entry point
 - `legacy/`
   - non-primary service layouts preserved for reference
 

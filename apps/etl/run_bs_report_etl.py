@@ -10,11 +10,13 @@ from datetime import datetime
 from pathlib import Path
 
 
-_SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
+_SRC_ROOT = Path(__file__).resolve().parents[2] / "src"
 if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
 
 from stockanalysis.config import ensure_dir, resolve_data
+
+from bs_report_pipeline import BsReportEtl
 
 
 MARKETS = ("twse", "tpex")
@@ -139,8 +141,6 @@ def process_market(paths: MarketPaths, args: argparse.Namespace) -> dict[str, in
             "failed_folders": 0,
             "skipped_folders": skipped,
         }
-
-    from etl_bs_report import BsReportEtl
 
     etl = BsReportEtl(paths.inbox_dir, paths.output_dir, max_workers=args.max_workers)
     stats, folder_results = etl.run(pending_folders)
