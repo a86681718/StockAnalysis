@@ -80,21 +80,30 @@ stateDiagram-v2
 flowchart LR
     gcs[(GCS bucket<br/>bs_report/twse|tpex/yyyyMMdd/*.csv)]
     rsync[gcloud storage rsync]
-    raw[Raw local folders<br/>bs_report/twse|tpex/yyyyMMdd]
+    rawBs[Local raw bs_report folders<br/>data/bs_report/twse|tpex/yyyyMMdd]
     etl[ETL scripts<br/>apps/etl]
-    parquet[(Parquet outputs<br/>bs_report/parquet_twse|tpex)]
-    derived[(Derived datasets<br/>data/_derived)]
+    brokerParquet[(Broker parquet<br/>data/bs_report/parquet_twse|parquet_tpex)]
+
+    ohlcCsv[Local OHLC CSV<br/>data/ohlc/twse-yyyymmdd.csv<br/>data/ohlc/tpex-yyyymmdd.csv]
+    brokerList[Broker list CSV<br/>data/broker_list.csv]
+
     analysis[Analysis scripts<br/>apps/analysis and src/stockanalysis/analysis]
-    viz[Dash visualization<br/>apps/visualization/app.py]
+    derived[(Derived datasets<br/>data/_derived/ohlc.parquet<br/>data/_derived/scored.parquet<br/>other derived outputs)]
     reports[Outputs<br/>HTML / PNG / CSV]
+    viz[Dash visualization<br/>apps/visualization/app.py]
 
     gcs --> rsync
-    rsync --> raw
-    raw --> etl
-    etl --> parquet
-    parquet --> analysis
-    parquet --> viz
+    rsync --> rawBs
+    rawBs --> etl
+    etl --> brokerParquet
+
+    brokerParquet --> analysis
+    ohlcCsv --> analysis
     analysis --> derived
-    derived --> viz
     analysis --> reports
+
+    brokerParquet --> viz
+    derived --> viz
+    ohlcCsv --> viz
+    brokerList --> viz
 ```
