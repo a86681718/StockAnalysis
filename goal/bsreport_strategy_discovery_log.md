@@ -150,6 +150,7 @@
 - 對 `strategy_search_oof` 做局部搜索，不再跑大範圍全格點。
 - 優先測試與 `days_above` / `feat2` / `weighted return` 相關的 prediction source。
 - 對 `Candidate E` 做更長驗證窗與更嚴格穩定性檢查，確認不是區間偶然。
+- 以 `apps/analysis/run_strategy_replay.py` 固定輸出 `Candidate E` 的 trades / summary，避免後續只能靠 grid 結果回推。
 - 每次新增嘗試都追加到本文件底部。
 
 ## Attempt Log
@@ -379,3 +380,31 @@
   - 這提升了該策略區域的可信度，但不能取代 `wf` 的主驗證地位。
 - status:
   - `Supportive long-range evidence`
+
+### Attempt 2026-05-26 / Candidate E Replay Artifact
+
+- scope:
+  - 新增單一策略回放工具，把已確認的候選參數直接輸出成 `summary + trades` artifact，方便後續長窗檢查與人工檢閱。
+- tool:
+  - `apps/analysis/run_strategy_replay.py`
+- replayed config:
+  - preds: `data/_derived/ml_runs/breakout10_predictions_wf.csv`
+  - window: `2025-11-01 ~ 2026-02-03`
+  - `topk=4`
+  - `gap_th=0.010`
+  - `hold_days=15`
+  - `max_positions=5`
+  - no `tp/sl/trail`
+- artifacts:
+  - `data/_derived/ml_runs/candidate_e_wf_summary.json`
+  - `data/_derived/ml_runs/candidate_e_wf_trades.csv`
+- findings:
+  - replay summary 精確對上先前 grid 搜索結果：
+    - `trades=20`
+    - `win_net_ret=0.8000`
+    - `mean_net_ret=0.1587`
+    - `total_net_ret=0.7806`
+    - `signals=14`
+  - 代表這組候選已不只是 grid 表格上的一列，而是可重播、可審閱的正式基線。
+- interpretation:
+  - 之後若要做更長窗、換切窗、或人工檢查單筆交易結構，應以這支 replay 工具為主，而不是再從搜索腳本反推。
