@@ -537,3 +537,61 @@
   - 目前不適合把這類簡單 regime filter 直接加進正式策略。
 - decision:
   - 暫時排除「單一市場 breadth / ret20 門檻」作為正式 regime filter。
+
+### Attempt 2026-05-27 / Candidate A Chip Filters On Early Window
+
+- scope:
+  - 回到 `Analysis_BsReport_v4` 精神，嘗試用 `features.parquet` 中的籌碼特徵當第二層個股 filter，而不是再疊新的市場濾網。
+  - 因 `features.parquet` 目前只到 `2025-12-11`，本輪只驗：
+    - `early_full = 2025-11-01 ~ 2025-12-11`
+    - `bad = 2025-10-15 ~ 2025-11-30`
+    - `recovery = 2025-11-25 ~ 2025-12-11`
+- artifacts:
+  - `data/_derived/ml_runs/candidate_e_chip_filter_scan_early.csv`
+  - `data/_derived/ml_runs/candidate_e_chip_filter_scan_early_v2.csv`
+- features tested:
+  - `dyn_k`
+  - `hhi_posnet`
+  - `stock_dyn_k_10`
+  - `trend_strength_20`
+  - `stock_net_buy_days_10`
+  - `stock_net_buy_days_20`
+  - `warrant_hhi_posnet_20`
+  - `top_posnet_ratio`
+- findings:
+  - baseline 在 `early_full` 只有：
+    - `win=0.7000`
+    - `mean_net=0.0799`
+  - `dyn_k >= 20` 能把 `early_full` 拉到：
+    - `win=0.7000`
+    - `mean_net=0.1732`
+    - 但 `bad` 仍為：
+    - `win=0.5000`
+    - `mean_net=-0.0136`
+  - `top_posnet_ratio <= 0.605` 的結果和 `dyn_k >= 20` 幾乎相同，表示這兩者在樣本內高度重疊。
+  - `stock_net_buy_days_20 >= 1` 是本輪另一個值得保留的次佳訊號：
+    - `early_full`:
+      - `win=0.6000`
+      - `mean_net=0.1013`
+    - `bad`:
+      - `win=0.6000`
+      - `mean_net=0.0491`
+    - 它沒有達標，但確實改善了壞窗。
+  - `warrant_hhi_posnet_20 <= 0.75` 對 `early_full` 有幫助：
+    - `win=0.8000`
+    - `mean_net=0.1507`
+    - 但對 `bad` 幾乎沒改善：
+    - `win=0.4000`
+    - `mean_net=0.0089`
+  - `hhi_posnet` 上限、`trend_strength_20`、`stock_dyn_k_10` 等條件都沒有形成真正更好的策略。
+- interpretation:
+  - 單一籌碼特徵還不夠，但這輪至少確認兩件事：
+    - `dyn_k / top_posnet_ratio` 這類主力結構特徵，確實能強化好區間
+    - `stock_net_buy_days_20` 這類持續性特徵，對壞窗有部分修復能力
+  - 這表示下一步若要走 `BsReport_v4 + breakout10` 融合線，最合理的方向不是單一硬門檻，而是：
+    - `dyn_k` 類強度
+    - `net_buy_days` 類持續性
+    - possibly `warrant_hhi` 類權證結構
+    - 做小型二階交互條件
+- status:
+  - `Promising signals, no thresholded solution yet`
