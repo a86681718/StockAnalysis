@@ -1,52 +1,99 @@
-import os
+import argparse
 import json
-import requests
-import pandas as pd
+import os
 from datetime import datetime, timedelta
+from typing import Optional
+
+import pandas as pd
+import requests
 
 from stockanalysis.config import resolve_data
 
-data_folder_name = str(resolve_data())
-subfolder_name = 'ohlc'
-time_format = "%Y%m%d"
+DATA_FOLDER = str(resolve_data())
+SUBFOLDER = "ohlc"
+FILENAME_PREFIX = "twse-"
+DATE_FMT = "%Y%m%d"
+API_DATE_FMT = "%Y%m%d"
 
-# 確保資料夾存在
-data_folder_path = os.path.join(data_folder_name, subfolder_name)
-os.makedirs(data_folder_path, exist_ok=True)
 
-# 從資料夾中取得已存在的檔案，並解析日期
-existing_files = [f for f in os.listdir(data_folder_path) if f.startswith("twse-") and f.endswith(".csv")]
-if existing_files:
-    # 取得檔案中的最新日期
-    existing_dates = [datetime.strptime(f.split('-')[1].split('.')[0], time_format) for f in existing_files]
-    start_dt = max(existing_dates) + timedelta(days=1)
-else:
-    # 如果沒有檔案，則預設為前一天
-    start_dt = datetime.now() - timedelta(days=1)
+def ensure_output_dir() -> str:
+    path = os.path.join(DATA_FOLDER, SUBFOLDER)
+    os.makedirs(path, exist_ok=True)
+    return path
 
-end_dt = datetime.now()
 
-num_days = (end_dt - start_dt).days + 1
-date_list = [start_dt + timedelta(days=x) for x in range(num_days)]
-for d in date_list:
-    date_str = d.strftime("%Y%m%d")
-    print(date_str)
-    url = f"https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date={date_str}&type=ALL&response=json"
-    resp = requests.get(url)
-    twse_result = resp.content.decode('utf8')
-    try:
-        twse_result_json = json.loads(twse_result)
-        if 'tables' not in twse_result_json:
+def latest_existing_date(path: str) -> datetime:
+    files = [f for f in os.listdir(path) if f.startswith(FILENAME_PREFIX) and f.endswith(".csv")]
+    if not files:
+        return datetime.now() - timedelta(days=1)
+    dates = [datetime.strptime(f[len(FILENAME_PREFIX):len(FILENAME_PREFIX) + 8], DATE_FMT) for f in files]
+    return max(dates)
+
+
+def fetch_twse_daily(target: datetime) -> pd.DataFrame:
+    api_date = target.strftime(API_DATE_FMT)
+    url = f"https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date={api_date}&type=ALL&response=json"
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    payload = json.loads(resp.content.decode("utf8"))
+    tables = payload.get("tables", [])
+    if not tables:
+        return pd.DataFrame()
+
+    for table in tables:
+        title = table.get("title", "")
+        if "每日收盤行情" in title:
+            fields = table.get("fields", [])
+            data = table.get("data", [])
+            return pd.DataFrame(data=data, columns=fields)
+
+    return pd.DataFrame()
+
+
+def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Fetch TWSE daily OHLC data")
+    parser.add_argument(
+        "--start-date",
+        help="Inclusive start date in yyyy/mm/dd format",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    args = parse_args(argv)
+    output_dir = ensure_output_dir()
+    if args.start_date:
+        try:
+            start_dt = datetime.strptime(args.start_date, "%Y/%m/%d")
+        except ValueError:
+            print("Invalid --start-date; expected yyyy/mm/dd")
+            return 1
+    else:
+        start_dt = latest_existing_date(output_dir) + timedelta(days=1)
+
+    end_date = datetime.now().date()
+    current_dt = start_dt
+
+    if current_dt.date() > end_date:
+        return 0
+
+    while current_dt.date() <= end_date:
+        date_str = current_dt.strftime(DATE_FMT)
+        try:
+            df = fetch_twse_daily(current_dt)
+        except Exception as exc:
+            print(f"Fetch failed for {date_str}: {exc}")
+            current_dt += timedelta(days=1)
             continue
-        tables = twse_result_json['tables']
-        
-        for table in tables:
-            for k in table.keys():
-                if '每日收盤行情' in table['title']:
-                    fields = table['fields']
-                    data = table['data']
-        
-        df = pd.DataFrame(data=data, columns=fields)
-        df.to_csv(os.sep.join([data_folder_name, subfolder_name, f"twse-{date_str}.csv"]), index=False)
-    except Exception as e:
-        raise e
+        if df.empty:
+            current_dt += timedelta(days=1)
+            continue
+        output_path = os.path.join(output_dir, f"{FILENAME_PREFIX}{date_str}.csv")
+        df.to_csv(output_path, index=False, encoding="utf-8")
+        print(f"Saved {output_path}")
+        current_dt += timedelta(days=1)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

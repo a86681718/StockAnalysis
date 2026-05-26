@@ -79,6 +79,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             df = fetch_tpex_daily(current_dt)
         except Exception as exc:
             print(f"Fetch failed for {date_str}: {exc}")
+            current_dt += timedelta(days=1)
             continue
         if df.empty:
             current_dt += timedelta(days=1)
