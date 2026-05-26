@@ -713,3 +713,105 @@
     - 或引入 day-level quality / regime classifier 來決定該用哪一支
 - status:
   - `Best dual-layer threshold region so far, still not final`
+
+### Attempt 2026-05-27 / Repair Branch Full-Range Validation
+
+- scope:
+  - 不再停留在早期窗口，直接用完整日期重建 `repair branch` 所需特徵：
+    - `stock_net_buy_days_20`
+    - `warrant_hhi_posnet_20`
+  - 原始來源：
+    - `flow_stock_daily.parquet`
+    - `flow_warrant_daily_by_underlying.parquet`
+  - rolling 定義沿用 `Analysis_BsReport_v1`：
+    - window=`20`
+    - `min_periods=6`
+- artifacts:
+  - `data/_derived/ml_runs/candidate_e_full_repair_branch_validation.csv`
+  - `data/_derived/ml_runs/breakout10_predictions_wf_repair_branch.csv`
+- repaired branch definition:
+  - `stock_net_buy_days_20 >= 1`
+  - `warrant_hhi_posnet_20 <= 0.80`
+- findings:
+  - 這條 `repair branch` 在完整 `2025-11-01 ~ 2026-02-03` 上，首次明確同時達標：
+    - `trades=20`
+    - `win=0.7500`
+    - `mean_net=0.1410`
+    - `total_net=0.7081`
+  - 分段看：
+    - `2025-11`: `0.6000 / 0.1052`
+    - `2025-12`: `0.9000 / 0.2624`
+    - `2026-01-01 ~ 2026-02-03`: `1.0000 / 0.4074`
+- interpretation:
+  - 這是目前第一條在較長驗證窗上，明確跨過目標門檻的 `BsReport_v4 + breakout10` 融合線。
+  - 但單月 / rolling 穩定性還需要再驗，不能只靠這個 full-window 成績就宣稱完成。
+
+### Attempt 2026-05-27 / Repair Branch Rolling Windows
+
+- scope:
+  - 對完整日期重建後的 `repair branch` 做 rolling window 驗證，避免只看整段平均。
+- artifacts:
+  - `data/_derived/ml_runs/repair_branch_rolling_windows.csv`
+- findings:
+  - rolling windows 結果：
+    - `2025-10-01 ~ 2025-11-15`: `0.4000 / 0.0690`
+    - `2025-10-15 ~ 2025-11-30`: `0.6000 / 0.0491`
+    - `2025-11-01 ~ 2025-12-15`: `0.6000 / 0.1052`
+    - `2025-11-15 ~ 2025-12-31`: `0.6000 / 0.1137`
+    - `2025-12-01 ~ 2026-01-15`: `0.9000 / 0.2624`
+    - `2025-12-15 ~ 2026-02-03`: `1.0000 / 0.2925`
+  - strict pass windows (`win > 0.70 and mean_net > 0.10`)：
+    - `2 / 6`
+- interpretation:
+  - full-window 已達標，但 rolling 穩定度還不足，尤其早段仍弱。
+  - 這表示 repair filter 雖然成功把策略推進到「候選可交易解」，但還沒到「長期驗證完成」。
+
+### Attempt 2026-05-27 / Repair Branch Strategy Search
+
+- scope:
+  - 固定 `repair branch` universe，直接在 branch 內做局部策略搜索。
+  - 搜索空間：
+    - `topk / top_pct`
+    - `gap_th`
+    - `hold_days 13~16`
+    - `max_positions 4~6`
+    - 少量 `tp/sl`
+- artifacts:
+  - `data/_derived/ml_runs/_tmp_repair_branch_strategy_search.csv`
+  - `data/_derived/ml_runs/_tmp_repair_branch_strategy_search_best.csv`
+  - `data/_derived/ml_runs/repair_branch_best_summary.json`
+  - `data/_derived/ml_runs/repair_branch_best_trades.csv`
+  - `data/_derived/ml_runs/repair_branch_best_rolling_windows.csv`
+- strongest candidate:
+  - `select_mode=top_pct`
+  - `topk=3` (cap)
+  - `top_pct=0.02`
+  - `gap_th=0.010`
+  - `hold_days=16`
+  - `max_positions=6`
+  - no `tp/sl`
+- full-window result:
+  - `trades=20`
+  - `win=0.8500`
+  - `mean_net=0.2288`
+  - `total_net=0.9540`
+- rolling windows:
+  - `2025-10-01 ~ 2025-11-15`: `0.5833 / 0.0789`
+  - `2025-10-15 ~ 2025-11-30`: `0.6667 / 0.0472`
+  - `2025-11-01 ~ 2025-12-15`: `0.7500 / 0.1614`
+  - `2025-11-15 ~ 2025-12-31`: `0.7500 / 0.1398`
+  - `2025-12-01 ~ 2026-01-15`: `0.9167 / 0.2627`
+  - `2025-12-15 ~ 2026-02-03`: `0.9091 / 0.2226`
+  - strict pass windows:
+    - `4 / 6`
+- comparison vs other top repair-branch candidates:
+  - 在我抽查的前五個 distinct 候選中，這組同時擁有：
+    - 最高 `rolling_pass`
+    - 最高 `full_mean`
+    - 最高 `rolling_avg_mean`
+- interpretation:
+  - 這是目前最強、最接近最終答案的候選。
+  - 它已經不只是 full-window 漂亮，而是 rolling 穩定度也明顯優於先前 baseline 與其他 branch 內候選。
+  - 但因為仍有 `2 / 6` 視窗未過嚴格門檻，所以目前最合理的定位是：
+    - `strongest current candidate`
+    - 不是 `long-term verified strategy`
