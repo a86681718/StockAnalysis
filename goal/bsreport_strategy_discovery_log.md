@@ -815,3 +815,52 @@
   - 但因為仍有 `2 / 6` 視窗未過嚴格門檻，所以目前最合理的定位是：
     - `strongest current candidate`
     - 不是 `long-term verified strategy`
+
+### Attempt 2026-05-27 / Best Candidate Day-Level Quality Filters
+
+- scope:
+  - 只針對目前最強候選：
+    - `repair branch`
+    - `top_pct=0.02`
+    - `gap_th=0.010`
+    - `hold_days=16`
+    - `max_positions=6`
+  - 不再動 strategy grid，只掃描 day-level 品質門檻，判斷當天是否交易。
+- day quality features:
+  - 以當天實際會選入的候選集計算：
+    - `mean_pred`
+    - `min_pred`
+    - `pred_spread`
+    - `picks`
+- artifact:
+  - `data/_derived/ml_runs/repair_branch_day_quality_filter_scan.csv`
+- scan result:
+  - 有 `74` 組條件能保住：
+    - `full_win > 70%`
+    - `full_mean > 10%`
+  - 但沒有任何一組把 rolling strict pass 從 `4 / 6` 提升到更高。
+  - 最佳類型的條件大致是：
+    - `min_pred >= 0.62`
+    - `pred_spread <= 0.08 ~ 0.12`
+  - 代表例子：
+    - `mean_th >= 0.58`
+    - `min_th >= 0.62`
+    - `pred_spread <= 0.12`
+    - `full`:
+      - `trades=13`
+      - `win=0.8462`
+      - `mean_net=0.2038`
+    - rolling strict pass:
+      - `4 / 6`
+  - 但這些條件的共通問題是：
+    - 沒有修復兩個最弱的早期視窗
+    - 只是把後段更強的交易保留下來
+    - 同時犧牲交易數
+- interpretation:
+  - 這代表目前的問題不是「少數低品質交易日混進來」而已。
+  - 更像是早期兩個弱窗整體 market/label 結構就不同，單靠簡單的 day-level score quality 門檻無法解掉。
+  - 因此：
+    - day-level quality filter 可作為保守版風控工具
+    - 但不是把策略推向長期穩定的關鍵突破點
+- status:
+  - `No improvement over 4/6 rolling pass`
