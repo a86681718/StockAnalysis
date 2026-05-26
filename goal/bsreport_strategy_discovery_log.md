@@ -595,3 +595,52 @@
     - 做小型二階交互條件
 - status:
   - `Promising signals, no thresholded solution yet`
+
+### Attempt 2026-05-27 / Candidate A Chip Interaction Filters
+
+- scope:
+  - 延續上一輪結論，不再測單一籌碼欄位，改做小型二階交互條件。
+  - 只使用前面已顯示有訊號的欄位：
+    - `dyn_k`
+    - `top_posnet_ratio`
+    - `stock_net_buy_days_20`
+    - `warrant_hhi_posnet_20`
+  - 驗證窗仍限於 `features.parquet` 有覆蓋的早期區間。
+- artifact:
+  - `data/_derived/ml_runs/candidate_e_chip_interaction_scan_early.csv`
+- conditions tested:
+  - `dyn_k >= 20 and stock_net_buy_days_20 >= 1`
+  - `dyn_k >= 20 and stock_net_buy_days_20 >= 1 and warrant_hhi_posnet_20 <= 0.75`
+  - `dyn_k >= 20 and top_posnet_ratio <= 0.605 and stock_net_buy_days_20 >= 1`
+  - `stock_net_buy_days_20 >= 1 and warrant_hhi_posnet_20 <= 0.75`
+  - `dyn_k >= 40 or stock_net_buy_days_20 >= 1`
+  - `dyn_k >= 20 and warrant_hhi_posnet_20 <= 0.75`
+- findings:
+  - `dyn_k` 類交互條件大多仍偏向放大好區間，但對壞窗沒有真正修復力。
+  - 最值得保留的是：
+    - `stock_net_buy_days_20 >= 1 and warrant_hhi_posnet_20 <= 0.75`
+    - `early_full`:
+      - `win=0.6000`
+      - `mean_net=0.1013`
+    - `bad`:
+      - `win=0.6000`
+      - `mean_net=0.0464`
+    - `recovery`:
+      - `win=0.6000`
+      - `mean_net=0.1802`
+  - 這組合不是最強，但它是目前少數同時做到：
+    - 保留 `early_full` 的 `>10%` 平均報酬
+    - 又把 `bad` window 從接近零或負值拉回明顯正值
+  - 相對地：
+    - `dyn_k >= 20 and warrant_hhi_posnet_20 <= 0.75`
+    - 雖然 `early_full` 很強：`0.7000 / 0.1732`
+    - 但 `bad` 仍為負：`0.5000 / -0.0343`
+- interpretation:
+  - 這輪透露一個重要方向：
+    - `dyn_k` 類強度特徵比較像放大 breakout 已經有效的區間
+    - `net_buy_days + warrant_hhi` 這類持續性 / 結構特徵，比較像用來修補壞窗
+  - 也就是說，若後續要做真正的 second-stage filter，可能不該是單一路徑，而是：
+    - 用 `dyn_k` 決定強度
+    - 用 `net_buy_days / warrant_hhi` 決定是否避開脆弱訊號
+- status:
+  - `Interaction signal found, still below final target`
