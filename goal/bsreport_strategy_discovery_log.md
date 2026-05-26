@@ -864,3 +864,102 @@
     - 但不是把策略推向長期穩定的關鍵突破點
 - status:
   - `No improvement over 4/6 rolling pass`
+
+### Attempt 2026-05-27 / Repair Branch Signal-Level Chip Grid
+
+- scope:
+  - 直接在目前最強候選的 `repair branch` universe 上做完整 signal-level chip filter 格點。
+  - 使用 4 個欄位：
+    - `dyn_k`
+    - `top_posnet_ratio`
+    - `stock_net_buy_days_20`
+    - `warrant_hhi_posnet_20`
+  - 目的：
+    - 不是再找新 branch
+    - 而是看能不能在 `repair branch` 內部再提高 rolling 穩定度
+- artifact:
+  - `data/_derived/ml_runs/repair_branch_signal_chip_grid.csv`
+- best finding:
+  - 單純加入：
+    - `top_posnet_ratio <= 0.610`
+  - 就能把先前 `4 / 6` rolling strict pass 提升到 `5 / 6`
+  - 同時保住很強的 full-window 成績：
+    - `full_trades=20`
+    - `full_win=0.8500`
+    - `full_mean=0.2215`
+  - 代表性 rolling 結果：
+    - `w1`: `0.7273 / 0.1242`
+    - `w2`: `0.6667 / 0.0447`
+    - `w3`: `0.7500 / 0.1171`
+    - `w4`: `0.7500 / 0.1156`
+    - `w5`: `0.9167 / 0.2948`
+    - `w6`: `0.9091 / 0.2226`
+- interpretation:
+  - `top_posnet_ratio` 這個欄位在目前階段比想像中更關鍵。
+  - 它不像 `dyn_k` 那樣只是在好區間放大 alpha，而是能把最早那個最差窗口中的其中一個弱窗拉回可接受區。
+  - 現在唯一仍明顯卡住的是：
+    - `w2 = 2025-10-15 ~ 2025-11-30`
+
+### Attempt 2026-05-27 / Refined Universe Strategy Search
+
+- scope:
+  - 把上一步得到的 refined universe 固定成：
+    - `repair branch`
+    - `top_posnet_ratio <= 0.610`
+  - 再在此 universe 內做局部策略搜索。
+- artifacts:
+  - `data/_derived/ml_runs/breakout10_predictions_wf_repair_branch_topratio0610.csv`
+  - `data/_derived/ml_runs/_tmp_repair_branch_topratio0610_strategy_search.csv`
+  - `data/_derived/ml_runs/_tmp_repair_branch_topratio0610_strategy_search_best.csv`
+  - `data/_derived/ml_runs/repair_branch_topratio0610_best_summary.json`
+  - `data/_derived/ml_runs/repair_branch_topratio0610_best_trades.csv`
+  - `data/_derived/ml_runs/repair_branch_topratio0610_best_rolling_windows.csv`
+- strongest refined candidate:
+  - `select_mode=top_pct`
+  - `top_pct=0.015`
+  - `gap_th=0.005`
+  - `hold_days=16`
+  - `max_positions=6`
+  - no `tp/sl`
+- full-window result:
+  - `trades=20`
+  - `win=0.9000`
+  - `mean_net=0.2261`
+  - `total_net=0.9386`
+- rolling windows:
+  - `w1`: `0.8000 / 0.1443`
+  - `w2`: `0.5833 / 0.0871`
+  - `w3`: `0.8333 / 0.1641`
+  - `w4`: `0.7500 / 0.1156`
+  - `w5`: `1.0000 / 0.2896`
+  - `w6`: `1.0000 / 0.2400`
+  - strict pass:
+    - `5 / 6`
+- comparison vs prior strongest candidate:
+  - 前一版 strongest candidate：
+    - `win=0.8500`
+    - `mean_net=0.2288`
+    - rolling `4 / 6`
+  - 新 refined candidate：
+    - `win=0.9000`
+    - `mean_net=0.2261`
+    - rolling `5 / 6`
+  - 雖然 full mean 略低，但穩定度明顯更好，因此目前應把它視為新的最強候選。
+- distinct-top candidate rolling comparison:
+  - 我另外把 refined search 的前 20 個 distinct 候選拿去做 rolling 檢查。
+  - 結果沒有任何一組達到 `6 / 6`。
+  - 最好的幾組都卡在同一個弱窗：
+    - `w2 = 2025-10-15 ~ 2025-11-30`
+  - 其中目前最強的是：
+    - `top_pct=0.015`
+    - `gap_th=0.010`
+    - `hold_days=17`
+    - `max_positions=6`
+    - full: `0.8947 / 0.2382`
+    - rolling: `5 / 6`
+    - 弱窗仍是 `w2: 0.583 / 0.029`
+- interpretation:
+  - 這代表在現有訊號與 filter 框架下，`w2` 幾乎是共同瓶頸，而不是單一規則選錯。
+  - 目前已經相當接近長期穩定，但還差最後一個弱窗無法通過嚴格門檻。
+- status:
+  - `New strongest current candidate`
