@@ -644,3 +644,72 @@
     - 用 `net_buy_days / warrant_hhi` 決定是否避開脆弱訊號
 - status:
   - `Interaction signal found, still below final target`
+
+### Attempt 2026-05-27 / Candidate A Dual-Layer Threshold Grid
+
+- scope:
+  - 針對剛剛拆出的兩種功能線做小格點：
+    - `strong`:
+      - `dyn_k`
+    - `repair`:
+      - `stock_net_buy_days_20`
+      - `warrant_hhi_posnet_20`
+  - 不做大範圍盲搜，只掃有限閾值：
+    - `dyn_k`: `0, 10, 20, 30, 40`
+    - `stock_net_buy_days_20`: `0, 1, 2`
+    - `warrant_hhi_posnet_20`: `0.70, 0.75, 0.80, 1.00`
+    - 組合方式：
+      - `or`
+      - `and`
+- artifact:
+  - `data/_derived/ml_runs/candidate_e_dual_layer_grid_early.csv`
+- acceptance rule for this scan:
+  - `early_full mean_net >= 0.10`
+  - `bad mean_net >= 0.00`
+  - `early_full trades >= 8`
+  - `bad trades >= 8`
+- findings:
+  - 合格組合共有 `22` 組，但大致分成兩類：
+    - `warrant_hhi` 主導的寬鬆組合
+    - `stock_net_buy_days_20 + warrant_hhi` 主導的修補組合
+  - 表現最強的一組是：
+    - `warrant_hhi_posnet_20 <= 0.75`
+    - 這其實等價於 `dyn_th=0, buy20_th=0, whhi_th=0.75, mode=and`
+    - `early_full`:
+      - `win=0.8000`
+      - `mean_net=0.1507`
+    - `bad`:
+      - `win=0.4000`
+      - `mean_net=0.0089`
+    - 它的優點是保住了整體報酬，缺點是壞窗勝率仍然很差。
+  - 最像「修補壞窗」的一小塊區域是：
+    - `stock_net_buy_days_20 >= 1`
+    - `warrant_hhi_posnet_20 <= 0.80` 或 `1.00`
+    - `mode=and`
+    - `early_full`:
+      - `win=0.6000`
+      - `mean_net=0.1013`
+    - `bad`:
+      - `win=0.6000`
+      - `mean_net=0.0491`
+    - 這是目前最乾淨的「early_full 仍過 10%，bad window 也維持正值」解。
+  - 中間型組合例如：
+    - `dyn_k >= 30` with loose repair `or`
+    - `early_full = 0.1374`
+    - `bad = 0.0206`
+    - 代表也存在一些兼顧型區域，但仍未達到高勝率。
+- interpretation:
+  - 這輪最重要的進展不是找到最終策略，而是把 dual-layer 方向分成兩個可操作分支：
+    - `high-return branch`
+      - 以 `warrant_hhi` 為主
+      - 優先保住整體 alpha
+      - 接受壞窗勝率不佳
+    - `repair branch`
+      - 以 `stock_net_buy_days_20 + warrant_hhi` 為主
+      - 優先讓壞窗回正
+      - 接受整體勝率暫時不足
+  - 下一步若要真的推向最終策略，應該不是再疊更多硬條件，而是：
+    - 把這兩個 branch 做成切換邏輯
+    - 或引入 day-level quality / regime classifier 來決定該用哪一支
+- status:
+  - `Best dual-layer threshold region so far, still not final`
