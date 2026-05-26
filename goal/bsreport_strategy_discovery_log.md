@@ -963,3 +963,55 @@
   - 目前已經相當接近長期穩定，但還差最後一個弱窗無法通過嚴格門檻。
 - status:
   - `New strongest current candidate`
+
+### Attempt 2026-05-27 / Strongest Candidate Extra Chip Filters
+
+- scope:
+  - 固定目前最強候選：
+    - refined universe = `repair branch + top_posnet_ratio <= 0.610`
+    - strategy = `top_pct=0.015`, `gap_th=0.005`, `hold_days=16`, `max_positions=6`
+  - 不再動策略規則，只掃剩餘 signal-level chip filters：
+    - `dyn_k`
+    - `stock_net_buy_days_20`
+    - `warrant_hhi_posnet_20`
+  - 目的：
+    - 只看能不能把 `rolling 5 / 6` 再推到 `6 / 6`
+- artifact:
+  - `data/_derived/ml_runs/refined_best_extra_chip_filter_scan.csv`
+- findings:
+  - 沒有任何組合達到 `6 / 6` strict pass。
+  - 最接近的改善是：
+    - `stock_net_buy_days_20 >= 3`
+    - 不額外限制 `dyn_k`
+    - `warrant_hhi_posnet_20` 幾乎不重要
+  - 它能把唯一弱窗 `w2` 的平均報酬從：
+    - `0.0871`
+    - 拉到
+    - `0.1344`
+  - 但 `w2` 勝率仍只有：
+    - `0.6000`
+    - 因此仍然無法通過嚴格門檻。
+  - 代表性結果：
+    - `full`:
+      - `trades=12`
+      - `win=0.9167`
+      - `mean_net=0.2202`
+    - `w1`: `1.0000 / 0.1952`
+    - `w2`: `0.6000 / 0.1344`
+    - `w3`: `0.8571 / 0.1893`
+    - `w4`: `0.7500 / 0.1134`
+    - `w5`: `1.0000 / 0.2365`
+    - `w6`: `1.0000 / 0.2224`
+    - strict pass:
+      - `5 / 6`
+- interpretation:
+  - 這輪很重要，因為它把目前框架的極限說清楚了：
+    - 不是缺少某個顯而易見的 chip threshold
+    - 而是 `w2` 這個弱窗的問題更像「訊號本身的分布 / regime」不同
+  - 換句話說：
+    - 在現有 `breakout10 + chip filters + rule search` 框架下，已經很難再靠門檻堆疊把 `5 / 6` 推到 `6 / 6`
+  - 若要再往前走，下一個合理層級應是：
+    - 新的 day/regime classifier
+    - 或新的 second-stage prediction model
+- status:
+  - `Current framework appears saturated at 5/6`
