@@ -408,3 +408,77 @@
   - 代表這組候選已不只是 grid 表格上的一列，而是可重播、可審閱的正式基線。
 - interpretation:
   - 之後若要做更長窗、換切窗、或人工檢查單筆交易結構，應以這支 replay 工具為主，而不是再從搜索腳本反推。
+
+### Attempt 2026-05-27 / Candidate E Rolling Window Stability
+
+- scope:
+  - 不再只看月切窗，改用固定長度、互相重疊的 rolling windows 檢查 `Candidate E` 區域內三組代表配置：
+    - `A = topk=4, gap_th=0.010, hold_days=15, max_positions=5`
+    - `B = topk=5, gap_th=0.005, hold_days=15, max_positions=5`
+    - `C = topk=4, gap_th=0.005, hold_days=15, max_positions=6`
+  - 使用 `breakout10_predictions_wf.csv`
+- artifact:
+  - `data/_derived/ml_runs/candidate_e_wf_rolling_windows.csv`
+- rolling windows:
+  - `2025-10-01 ~ 2025-11-15`
+  - `2025-10-15 ~ 2025-11-30`
+  - `2025-11-01 ~ 2025-12-15`
+  - `2025-11-15 ~ 2025-12-31`
+  - `2025-12-01 ~ 2026-01-15`
+  - `2025-12-15 ~ 2026-02-03`
+- findings:
+  - `A` 的平均表現最好：
+    - average win: `0.7167`
+    - average mean_net: `0.1047`
+    - strict pass windows (`win > 0.70 and mean_net > 0.10`): `2 / 6`
+  - `C` 次之：
+    - average win: `0.6667`
+    - average mean_net: `0.1016`
+    - strict pass windows: `2 / 6`
+  - `B` 最弱：
+    - average win: `0.6167`
+    - average mean_net: `0.0946`
+    - strict pass windows: `0 / 6`
+  - 三組配置都在同一段窗口失效：
+    - `2025-10-15 ~ 2025-11-30`
+    - `A`: `0.4000 / 0.0168`
+    - `B`: `0.2000 / -0.0277`
+    - `C`: `0.3333 / -0.0190`
+- interpretation:
+  - 問題看起來不是單一參數點選錯，而是整個 `Candidate E` 區域都對某個市場區段敏感。
+  - 這比較像缺少 regime filter，而不是單純還沒把 `topk/gap/max_positions` 調到最漂亮。
+  - 目前三者裡面，`A` 仍是最合理的正式基線。
+
+### Attempt 2026-05-27 / Candidate E With days_above Cross Filter
+
+- scope:
+  - 測試是否能用第二條較偏結構強勢的訊號 `days_above_ge5_predictions.csv` 當交叉濾網，改善 `Candidate E` 的壞窗。
+  - 方法：
+    - 保持 `Candidate A` 交易規則不變
+    - 只保留 `days_above` 預測分數高於門檻的 `breakout10` 候選
+  - 門檻：
+    - `0.45`
+    - `0.50`
+    - `0.55`
+- artifact:
+  - `data/_derived/ml_runs/candidate_e_crossfilter_daysabove_scan.csv`
+- findings:
+  - 不加濾網時：
+    - full window: `0.8000 / 0.1587`
+    - bad window: `0.4000 / 0.0168`
+  - `days_pred >= 0.45`：
+    - full window 降為 `0.5500 / 0.1316`
+    - bad window 變成 `0.3000 / -0.0497`
+  - `days_pred >= 0.50`：
+    - full window 降為 `0.5000 / 0.0441`
+    - bad window 仍只有 `0.4000 / 0.0067`
+  - `days_pred >= 0.55`：
+    - full window 降為 `0.4500 / 0.0179`
+    - bad window `0.5000 / 0.0080`
+- interpretation:
+  - `days_above` 這條交叉濾網沒有改善壞窗，反而明顯破壞整段表現。
+  - 這代表：
+    - `breakout10` 與 `days_above` 的強勢結構不一定是互補
+    - 至少用這種硬門檻交叉方式，沒有形成更好的策略
+- decision:
+  - 暫時排除「用 `days_above` 門檻當第二層濾網」這條路。
