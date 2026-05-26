@@ -10,6 +10,7 @@ import pandas as pd
 import requests
 import urllib3
 from bs4 import BeautifulSoup
+from stockanalysis.config import resolve_data
 
 # Suppress SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -18,7 +19,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 HTML_PARSER = "html.parser"
 MARKET_TYPES = ["1", "2"]  # 1: 上市, 2: 上櫃
 EXPIRED_FLAGS = ["0", "1"]  # 0: 已到期, 1: 未到期
-OUTPUT_PATH = Path("warrant_list_dedup.csv")
+
+
+def resolve_output_path() -> Path:
+    output_path = resolve_data("warrant", "warrant_list_dedup.csv")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    return output_path
 
 
 def clean_code(value: str) -> str:
@@ -74,6 +80,7 @@ def fetch_warrant_dataframe(
 
 
 def main() -> None:
+    output_path = resolve_output_path()
     frames: List[pd.DataFrame] = []
     for market_type in MARKET_TYPES:
         for expired_flag in EXPIRED_FLAGS:
@@ -97,15 +104,15 @@ def main() -> None:
     logging.info("Aggregated %d records, reduced to %d unique warrants", len(combined), len(deduped))
 
     read_csv_kwargs = {"encoding": "utf-8-sig", "dtype": str}
-    if OUTPUT_PATH.exists():
-        logging.info("Existing file %s detected, merging before saving", OUTPUT_PATH)
-        existing = pd.read_csv(OUTPUT_PATH, **read_csv_kwargs)
+    if output_path.exists():
+        logging.info("Existing file %s detected, merging before saving", output_path)
+        existing = pd.read_csv(output_path, **read_csv_kwargs)
         merged = pd.concat([existing, deduped], ignore_index=True)
         deduped = merged.drop_duplicates(subset=["權證代號", "權證簡稱"]).reset_index(drop=True)
         logging.info("After merging with existing data: %d unique rows", len(deduped))
 
-    deduped.to_csv(OUTPUT_PATH, index=False, encoding="utf-8-sig")
-    logging.info("Saved deduplicated list to %s", OUTPUT_PATH)
+    deduped.to_csv(output_path, index=False, encoding="utf-8-sig")
+    logging.info("Saved deduplicated list to %s", output_path)
 
 
 def roc_year_month(target_date: date) -> str:
