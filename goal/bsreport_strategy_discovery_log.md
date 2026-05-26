@@ -313,3 +313,69 @@
     - 拉長驗證期間
     - 檢查不同切窗是否仍成立
     - 比較 `topk=4/5/6` 與 `max_positions=5/6` 的穩定性
+
+### Attempt 2026-05-26 / Candidate E Stability Check On wf Windows
+
+- scope:
+  - 固定 `Candidate E` 周邊參數區，只在較可信的 `breakout10_predictions_wf.csv` 上切不同驗證窗，不重新擴張搜索空間。
+  - 驗證窗：
+    - `2025-11-01 ~ 2025-11-30`
+    - `2025-12-01 ~ 2025-12-31`
+    - `2026-01-01 ~ 2026-02-03`
+- findings:
+  - `2025-12` 是最強區段，多組組合同時達標，例如：
+    - `topk=4`, `gap_th=0.010`, `hold_days=15`, `max_positions=5`
+    - `valid_trades=10`
+    - `valid_win=0.8000`
+    - `valid_mean_net=0.1664`
+  - `2025-11` 與 `2026-01 ~ 2026-02-03` 仍有正報酬，但穩定度下降：
+    - 同一組 `topk=4`, `gap_th=0.010`, `hold_days=15`, `max_positions=5`
+    - `2025-11`: `valid_win=0.7000`, `valid_mean_net=0.0799`, `valid_trades=10`
+    - `2026-01 ~ 2026-02-03`: `valid_win=0.6667`, `valid_mean_net=0.1281`, `valid_trades=6`
+  - 另一組 `topk=4`, `gap_th=0.005`, `hold_days=15`, `max_positions=6`：
+    - `2025-11`: `0.6667 / 0.0770 / 9 trades`
+    - `2025-12`: `0.7000 / 0.1451 / 10 trades`
+    - `2026-01 ~ 2026-02-03`: `0.8571 / 0.1687 / 7 trades`
+- interpretation:
+  - `Candidate E` 在 `wf` 切窗上不是完全失效，但表現明顯受區段影響。
+  - 整段驗證窗過門檻，不代表每個月都穩定過門檻。
+  - 目前比較合理的判斷是：
+    - `有訊號`
+    - `具備可交易潛力`
+    - `尚未達到長期穩定`
+- status:
+  - `Validated but regime-sensitive`
+
+### Attempt 2026-05-26 / Candidate E Support Check On all_wf Windows
+
+- scope:
+  - 用較弱證據的 `breakout10_predictions_all_wf.csv` 做較長期佐證，確認 `Candidate E` 參數區是否只在最近區間才有效。
+  - 驗證窗：
+    - `2025-08-01 ~ 2025-11-30`
+    - `2025-12-01 ~ 2026-02-26`
+- findings:
+  - 在前半段 `2025-08 ~ 2025-11`，`Candidate E` 代表組合表現仍強：
+    - `topk=4`, `gap_th=0.010`, `hold_days=15`, `max_positions=5`
+    - `valid_trades=25`
+    - `valid_win=0.7600`
+    - `valid_mean_net=0.1798`
+    - `topk=4`, `gap_th=0.005`, `hold_days=15`, `max_positions=6`
+    - `valid_trades=30`
+    - `valid_win=0.8000`
+    - `valid_mean_net=0.2065`
+  - 在後半段 `2025-12 ~ 2026-02-26`，相同區域也非常強，但交易數較少：
+    - `topk=4`, `gap_th=0.010`, `hold_days=15`, `max_positions=5`
+    - `valid_trades=13`
+    - `valid_win=1.0000`
+    - `valid_mean_net=0.2635`
+    - `topk=4`, `gap_th=0.005`, `hold_days=15`, `max_positions=6`
+    - `valid_trades=14`
+    - `valid_win=1.0000`
+    - `valid_mean_net=0.2321`
+- interpretation:
+  - 雖然 `all_wf` 不是最嚴格的 OOF 證據，但它提供了一個重要訊號：
+    - `Candidate E` 的參數區不是只在單一短期區段有效
+    - 相同結構在更長時間範圍內也能維持高報酬高勝率
+  - 這提升了該策略區域的可信度，但不能取代 `wf` 的主驗證地位。
+- status:
+  - `Supportive long-range evidence`
