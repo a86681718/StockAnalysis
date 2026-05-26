@@ -482,3 +482,58 @@
     - 至少用這種硬門檻交叉方式，沒有形成更好的策略
 - decision:
   - 暫時排除「用 `days_above` 門檻當第二層濾網」這條路。
+
+### Attempt 2026-05-27 / Candidate A Simple Market Regime Filters
+
+- scope:
+  - 針對目前最好的正式基線 `Candidate A`：
+    - `topk=4`
+    - `gap_th=0.010`
+    - `hold_days=15`
+    - `max_positions=5`
+  - 不改個股模型，只從 `ohlc.parquet` 4 碼股票 universe 建立簡單市場 regime 指標，測試是否能切掉 `2025-10-15 ~ 2025-11-30` 這段壞窗。
+- market features:
+  - `breadth_ma20`
+    - 全市場 4 碼股票中，收盤價高於 20MA 的比例
+  - `median_ret20`
+    - 全市場 4 碼股票的 20 日報酬中位數
+- artifacts:
+  - `data/_derived/ml_runs/candidate_e_regime_filter_scan.csv`
+- observations before filtering:
+  - 壞日確實偏向低 breadth、負 20 日中位報酬，例如：
+    - `2025-11-04`: `breadth_ma20=0.2611`, `median_ret20=-0.0285`
+    - `2025-11-05`: `breadth_ma20=0.2566`, `median_ret20=-0.0280`
+  - 但也存在低 regime 下的好交易日，例如：
+    - `2025-11-03`: `breadth_ma20=0.3579`, `median_ret20=-0.0208`, mean trade ret `0.2244`
+- filters tested:
+  - `breadth_ma20 >= 0.30`
+  - `breadth_ma20 >= 0.35`
+  - `breadth_ma20 >= 0.40`
+  - `median_ret20 >= -0.02`
+  - `median_ret20 >= -0.01`
+  - `median_ret20 >= 0.00`
+  - 組合條件：
+    - `breadth_ma20 >= 0.35 and median_ret20 >= -0.01`
+    - `breadth_ma20 >= 0.30 and median_ret20 >= -0.01`
+- findings:
+  - 原始 baseline：
+    - full window: `0.8000 / 0.1587`
+    - bad window: `0.4000 / 0.0168`
+  - `breadth_ma20 >= 0.35`：
+    - full window 降為 `0.6500 / 0.1179`
+    - bad window 仍只有 `0.3000 / 0.0226`
+  - `median_ret20 >= 0.00`：
+    - bad window 完全被切掉
+    - 但 full window 也掉到 `0.7692 / 0.0890`
+  - 其餘 `ret20` 與 `breadth + ret20` 組合也都類似：
+    - 壞窗改善有限或直接清空
+    - 同時把整段優勢一起削弱到低於目標
+- interpretation:
+  - 簡單市場 regime 確實與壞窗有關，但它不夠精準，無法區分：
+    - 壞市場裡的不該做 breakout 訊號
+    - 壞市場裡仍能成功的少數強訊號
+  - 換句話說：
+    - `Candidate A` 的問題不是單靠單一 market breadth / medium-term momentum 門檻就能解掉
+  - 目前不適合把這類簡單 regime filter 直接加進正式策略。
+- decision:
+  - 暫時排除「單一市場 breadth / ret20 門檻」作為正式 regime filter。
