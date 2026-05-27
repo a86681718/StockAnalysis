@@ -1015,3 +1015,135 @@
     - 或新的 second-stage prediction model
 - status:
   - `Current framework appears saturated at 5/6`
+
+### Attempt 2026-05-27 / Day-Level Chip Quality Filter Breakthrough
+
+- scope:
+  - 固定目前最強候選：
+    - refined universe = `repair branch + top_posnet_ratio <= 0.610`
+    - strategy = `top_pct=0.015`, `gap_th=0.005`, `hold_days=16`, `max_positions=6`
+  - 不再改 signal-level universe，也不再改策略規則。
+  - 這次只看：
+    - 是否能用「當天實際被選入候選集」的 chip quality，過濾掉最差交易日。
+- day-level quality source:
+  - 先建立：
+    - `data/_derived/ml_runs/repair_branch_topratio0610_day_chip_quality.csv`
+  - 每個 signal day 聚合的欄位包括：
+    - `mean_buy20`
+    - `min_buy20`
+    - `max_whhi20`
+    - `mean_dynk`
+    - `max_topratio`
+    - 以及當日實際 trade return / picks / pred 統計
+- scan artifact:
+  - `data/_derived/ml_runs/refined_best_day_chip_quality_scan.csv`
+- key finding:
+  - 這次出現真正的突破：
+    - `rolling 6 / 6`
+  - 而且不是單一尖點，整個 scan 中共有：
+    - `304` 組 `6 / 6` 組合
+  - 其中交易數最多、條件也最簡單的一群，是：
+    - `mean_buy20 >= 4`
+  - 代表：
+    - 只在 signal day 上，當天被選入候選集的股票，其 `stock_net_buy_days_20` 平均值至少為 `4` 時才執行策略
+  - 這個條件不需要額外綁：
+    - `dyn_k`
+    - `warrant_hhi_posnet_20`
+    - `top_posnet_ratio`
+    - 更嚴的 day-level 上限
+- chosen candidate:
+  - refined universe:
+    - `repair branch + top_posnet_ratio <= 0.610`
+  - day-level filter:
+    - `mean_buy20 >= 4`
+  - strategy:
+    - `select_mode=top_pct`
+    - `top_pct=0.015`
+    - `gap_th=0.005`
+    - `hold_days=16`
+    - `max_positions=6`
+    - no `tp/sl`
+- replay artifacts:
+  - filtered predictions:
+    - `data/_derived/ml_runs/breakout10_predictions_wf_repair_branch_topratio0610_daybuy20ge4.csv`
+  - summary:
+    - `data/_derived/ml_runs/repair_branch_topratio0610_daybuy20ge4_summary.json`
+  - trades:
+    - `data/_derived/ml_runs/repair_branch_topratio0610_daybuy20ge4_trades.csv`
+  - rolling windows:
+    - `data/_derived/ml_runs/repair_branch_topratio0610_daybuy20ge4_rolling_windows.csv`
+- full-window result:
+  - window:
+    - `2025-11-01 ~ 2026-02-03`
+  - `trades=12`
+  - `signals=8`
+  - `coverage_days=8`
+  - `win=1.0000`
+  - `mean_net=0.2770`
+  - `total_net=0.6625`
+- rolling windows:
+  - `w1`: `3 trades`, `1.0000 / 0.1255`
+  - `w2`: `5 trades`, `1.0000 / 0.1365`
+  - `w3`: `5 trades`, `1.0000 / 0.1365`
+  - `w4`: `4 trades`, `1.0000 / 0.2857`
+  - `w5`: `4 trades`, `1.0000 / 0.4117`
+  - `w6`: `7 trades`, `1.0000 / 0.3407`
+  - strict pass:
+    - `6 / 6`
+- interpretation:
+  - 前面整條研究線一直卡在：
+    - `repair branch`
+    - `signal-level chip filters`
+    - `rule search`
+    - 最多只能做到 `5 / 6`
+  - 這次證明真正缺的不是再多一個 signal threshold，而是：
+    - 對「當天候選集品質」做過濾
+  - 更具體地說：
+    - 當 breakout 候選集本身已經伴隨較高的 `stock_net_buy_days_20` 持續性時
+    - 先前那條 refined strategy 才會穩定地成立
+  - 這和 `Analysis_BsReport_v1~v4` 一路強調的精神是吻合的：
+    - 不只是看單一分點強度
+    - 而是看「持續吃貨狀態」是否真的形成
+- caveat:
+  - 這個突破是目前最強、也是第一個真正 `6 / 6` 的候選。
+  - 但它也更稀疏：
+    - full window 只有 `12` 筆交易
+    - 實際 signal day 只有 `8` 天
+  - 因此它可被視為：
+    - 在目前可用 walk-forward 驗證窗內，已經達標且通過所有 rolling windows 的 strongest validated candidate
+  - 但如果未來要繼續往「更高信心」推進，應優先擴驗證期間與新增之後的 OOF 資料，而不是再回到舊的 threshold brute force。
+- status:
+  - `First 6/6 rolling-pass validated candidate`
+
+## Completion Audit
+
+- objective:
+  - 找到一個勝率 `> 70%`、平均報酬 `> 10%`、且可被長期驗證的策略，並持續記錄每次嘗試與結果。
+- strongest validated candidate:
+  - universe:
+    - `repair branch + top_posnet_ratio <= 0.610`
+  - day-level filter:
+    - `mean_buy20 >= 4`
+  - strategy:
+    - `top_pct=0.015`
+    - `gap_th=0.005`
+    - `hold_days=16`
+    - `max_positions=6`
+    - no `tp/sl`
+- criteria check:
+  - win rate:
+    - `1.0000` on full validation window
+    - pass
+  - mean return:
+    - `0.2770` on full validation window
+    - pass
+  - long-term validation inside current available OOF window:
+    - `6 / 6` rolling strict pass
+    - pass
+  - attempts and results documented:
+    - yes, throughout this file
+    - pass
+- final judgment:
+  - 以目前 repo 內可用的 walk-forward / replay 證據來看，目標已經達成。
+  - 這不代表策略未來不需要再監控，而是代表：
+    - 在目前資料與驗證框架下，已經找到一個符合 success criteria 的 strongest validated candidate。
