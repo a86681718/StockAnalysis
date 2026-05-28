@@ -28,6 +28,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.stockanalysis.config import ensure_dir
 
+STOCK_STRONG_POSNET_PCT = 0.95
+WARRANT_STRONG_POSNET_PCT = 0.80
+
 
 @dataclass(frozen=True)
 class CostConfig:
@@ -99,25 +102,21 @@ def build_features() -> pd.DataFrame:
     ohlc["price_pos_60"] = _safe_div(ohlc["close"] - prev_low_60, prev_high_60 - prev_low_60)
 
     stock = stock.sort_values(["symbol", "date"]).reset_index(drop=True)
-    stock["stock_pos_day"] = (stock["net_total"] > 0).astype(float)
-    stock["stock_net_buy_days_10"] = stock.groupby("symbol")["stock_pos_day"].transform(lambda s: s.rolling(10, min_periods=4).sum())
-    stock["stock_net_buy_days_20"] = stock.groupby("symbol")["stock_pos_day"].transform(lambda s: s.rolling(20, min_periods=6).sum())
-    stock["stock_net_buy_days_40"] = stock.groupby("symbol")["stock_pos_day"].transform(lambda s: s.rolling(40, min_periods=10).sum())
     stock["stock_hhi_posnet_10"] = stock.groupby("symbol")["hhi_posnet"].transform(lambda s: s.rolling(10, min_periods=4).mean())
     stock["stock_hhi_posnet_20"] = stock.groupby("symbol")["hhi_posnet"].transform(lambda s: s.rolling(20, min_periods=6).mean())
     stock["stock_hhi_posnet_40"] = stock.groupby("symbol")["hhi_posnet"].transform(lambda s: s.rolling(40, min_periods=10).mean())
-    stock["stock_top_posnet_ratio_20"] = stock.groupby("symbol")["top_posnet_ratio"].transform(lambda s: s.rolling(20, min_periods=6).mean())
+    stock["stock_top_posnet_ratio_20"] = stock.groupby("symbol")["top_posnet_ratio"].transform(
+        lambda s: s.rolling(20, min_periods=6).mean()
+    )
     stock["stock_dyn_k_20"] = stock.groupby("symbol")["dyn_k"].transform(lambda s: s.rolling(20, min_periods=6).mean())
 
     warrant = warrant.sort_values(["symbol", "date"]).reset_index(drop=True)
-    warrant["warrant_pos_day"] = (warrant["net_total"] > 0).astype(float)
-    warrant["warrant_net_buy_days_10"] = warrant.groupby("symbol")["warrant_pos_day"].transform(lambda s: s.rolling(10, min_periods=4).sum())
-    warrant["warrant_net_buy_days_20"] = warrant.groupby("symbol")["warrant_pos_day"].transform(lambda s: s.rolling(20, min_periods=6).sum())
-    warrant["warrant_net_buy_days_40"] = warrant.groupby("symbol")["warrant_pos_day"].transform(lambda s: s.rolling(40, min_periods=10).sum())
     warrant["warrant_hhi_posnet_10"] = warrant.groupby("symbol")["hhi_posnet"].transform(lambda s: s.rolling(10, min_periods=4).mean())
     warrant["warrant_hhi_posnet_20"] = warrant.groupby("symbol")["hhi_posnet"].transform(lambda s: s.rolling(20, min_periods=6).mean())
     warrant["warrant_hhi_posnet_40"] = warrant.groupby("symbol")["hhi_posnet"].transform(lambda s: s.rolling(40, min_periods=10).mean())
-    warrant["warrant_top_posnet_ratio_20"] = warrant.groupby("symbol")["top_posnet_ratio"].transform(lambda s: s.rolling(20, min_periods=6).mean())
+    warrant["warrant_top_posnet_ratio_20"] = warrant.groupby("symbol")["top_posnet_ratio"].transform(
+        lambda s: s.rolling(20, min_periods=6).mean()
+    )
     warrant["warrant_dyn_k_20"] = warrant.groupby("symbol")["dyn_k"].transform(lambda s: s.rolling(20, min_periods=6).mean())
 
     stock_cols = [
@@ -128,9 +127,6 @@ def build_features() -> pd.DataFrame:
         "hhi_posnet",
         "top_posnet_ratio",
         "dyn_k",
-        "stock_net_buy_days_10",
-        "stock_net_buy_days_20",
-        "stock_net_buy_days_40",
         "stock_hhi_posnet_10",
         "stock_hhi_posnet_20",
         "stock_hhi_posnet_40",
@@ -154,9 +150,6 @@ def build_features() -> pd.DataFrame:
         "hhi_posnet",
         "top_posnet_ratio",
         "dyn_k",
-        "warrant_net_buy_days_10",
-        "warrant_net_buy_days_20",
-        "warrant_net_buy_days_40",
         "warrant_hhi_posnet_10",
         "warrant_hhi_posnet_20",
         "warrant_hhi_posnet_40",
@@ -191,6 +184,28 @@ def build_features() -> pd.DataFrame:
     _pct_rank_by_date(feat, "compression_20", "compression_20_pct_cs")
     _pct_rank_by_date(feat, "prior_abs_ret_20d", "prior_abs_ret_20d_pct_cs")
     _pct_rank_by_date(feat, "volume_ratio_5_20", "volume_ratio_5_20_pct_cs")
+
+    feat = feat.sort_values(["symbol", "date"]).reset_index(drop=True)
+    feat["stock_posnet_strong_day"] = (feat["stock_posnet_pct_cs"] >= STOCK_STRONG_POSNET_PCT).astype(float)
+    feat["stock_posnet_strong_days_10"] = feat.groupby("symbol")["stock_posnet_strong_day"].transform(
+        lambda s: s.rolling(10, min_periods=4).sum()
+    )
+    feat["stock_posnet_strong_days_20"] = feat.groupby("symbol")["stock_posnet_strong_day"].transform(
+        lambda s: s.rolling(20, min_periods=6).sum()
+    )
+    feat["stock_posnet_strong_days_40"] = feat.groupby("symbol")["stock_posnet_strong_day"].transform(
+        lambda s: s.rolling(40, min_periods=10).sum()
+    )
+    feat["warrant_posnet_strong_day"] = (feat["warrant_posnet_pct_cs"] >= WARRANT_STRONG_POSNET_PCT).astype(float)
+    feat["warrant_posnet_strong_days_10"] = feat.groupby("symbol")["warrant_posnet_strong_day"].transform(
+        lambda s: s.rolling(10, min_periods=4).sum()
+    )
+    feat["warrant_posnet_strong_days_20"] = feat.groupby("symbol")["warrant_posnet_strong_day"].transform(
+        lambda s: s.rolling(20, min_periods=6).sum()
+    )
+    feat["warrant_posnet_strong_days_40"] = feat.groupby("symbol")["warrant_posnet_strong_day"].transform(
+        lambda s: s.rolling(40, min_periods=10).sum()
+    )
 
     feat["stock_warrant_posnet_gap"] = feat["stock_posnet_pct_cs"] - feat["warrant_posnet_pct_cs"]
     feat["stock_warrant_dynk_gap"] = feat["stock_dyn_k_pct_cs"] - feat["warrant_dyn_k_pct_cs"]
@@ -247,64 +262,65 @@ def _iter_event_specs() -> list[dict[str, object]]:
 
     add_family(
         "extreme_accum_compression",
-        hold_days_list=[15, 20],
-        cooldown_list=[15, 20],
+        hold_days_list=[20],
+        cooldown_list=[15],
         stock_posnet_pct_cs=[0.98, 0.99],
-        stock_hhi_pct_cs=[0.85, 0.90],
-        stock_net_buy_days_20=[3, 5],
-        compression_20=[0.18, 0.25],
-        prior_abs_ret_20d=[0.08, 0.12],
+        stock_hhi_pct_cs=[0.85],
+        stock_posnet_strong_days_20=[3, 5],
+        compression_20=[0.18],
+        prior_abs_ret_20d=[0.08],
         warrant_posnet_floor=[0.50, 0.70],
     )
     add_family(
         "stealth_accumulation",
-        hold_days_list=[15, 20],
-        cooldown_list=[15, 20],
+        hold_days_list=[20],
+        cooldown_list=[15],
         stock_posnet_pct_cs=[0.98, 0.99],
-        stock_net_buy_days_20=[3, 5],
-        compression_20=[0.20, 0.30],
-        prior_abs_ret_20d=[0.08, 0.12],
+        stock_posnet_strong_days_20=[3, 5],
+        compression_20=[0.20],
+        prior_abs_ret_20d=[0.08],
         warrant_posnet_cap=[0.40, 0.55],
     )
     add_family(
         "stock_then_warrant_confirmation",
-        hold_days_list=[15, 20, 30],
-        cooldown_list=[15, 20],
+        hold_days_list=[20, 30],
+        cooldown_list=[15],
         stock_posnet_pct_cs=[0.95, 0.98],
-        stock_net_buy_days_20=[3, 5],
-        warrant_posnet_floor=[0.70, 0.85],
-        warrant_net_buy_days_20=[1, 3],
-        prior_abs_ret_20d=[0.08, 0.12],
+        stock_posnet_strong_days_20=[3, 5],
+        warrant_posnet_floor=[0.70],
+        warrant_posnet_strong_days_20=[1, 3],
+        prior_abs_ret_20d=[0.08],
     )
     add_family(
         "accumulation_during_compression",
         hold_days_list=[20, 30],
         cooldown_list=[20],
         stock_posnet_pct_cs=[0.95, 0.98],
-        stock_hhi_pct_cs=[0.85, 0.90],
+        stock_hhi_pct_cs=[0.85],
         compression_20=[0.15, 0.22],
-        price_pos_20_cap=[0.75, 0.90],
-        prior_abs_ret_20d=[0.10, 0.15],
+        price_pos_20_cap=[0.75],
+        prior_abs_ret_20d=[0.10],
     )
     add_family(
         "warrant_leads_stock",
-        hold_days_list=[15, 20, 30],
+        hold_days_list=[30, 40],
         cooldown_list=[15, 20],
+        stop_loss_list=[None, -0.12, -0.10],
         warrant_posnet_floor=[0.98, 0.99],
-        warrant_net_buy_days_20=[1, 3],
-        stock_posnet_floor=[0.70, 0.85],
-        stock_posnet_cap=[0.90, 0.95],
+        warrant_posnet_strong_days_20=[1, 3, 5],
+        stock_posnet_floor=[0.70],
+        stock_posnet_cap=[0.90],
         prior_abs_ret_20d=[0.08, 0.12],
     )
     add_family(
         "accumulation_pre_breakout",
-        hold_days_list=[15, 20, 25, 30],
-        cooldown_list=[10, 15, 20],
-        stop_loss_list=[None, -0.12, -0.10],
-        stock_posnet_pct_cs=[0.93, 0.95, 0.98],
-        stock_net_buy_days_20=[3, 4, 5],
+        hold_days_list=[20, 30],
+        cooldown_list=[15],
+        stop_loss_list=[None, -0.10],
+        stock_posnet_pct_cs=[0.95, 0.98],
+        stock_posnet_strong_days_20=[3, 5],
         breakout_gap_20_cap=[0.02, 0.05],
-        volume_ratio_5_20_cap=[1.20, 1.50, 1.80],
+        volume_ratio_5_20_cap=[1.50, 1.80],
         warrant_posnet_floor=[0.50, 0.70],
     )
     return specs
@@ -331,21 +347,21 @@ def _apply_event_spec(feat: pd.DataFrame, spec: dict[str, object]) -> pd.Series:
     if family == "extreme_accum_compression":
         cond &= feat["stock_posnet_pct_cs"] >= float(spec["stock_posnet_pct_cs"])
         cond &= feat["stock_hhi_pct_cs"] >= float(spec["stock_hhi_pct_cs"])
-        cond &= feat["stock_net_buy_days_20"] >= float(spec["stock_net_buy_days_20"])
+        cond &= feat["stock_posnet_strong_days_20"] >= float(spec["stock_posnet_strong_days_20"])
         cond &= feat["compression_20"] <= float(spec["compression_20"])
         cond &= feat["prior_abs_ret_20d"] <= float(spec["prior_abs_ret_20d"])
         cond &= feat["warrant_posnet_pct_cs"].fillna(0.0) >= float(spec["warrant_posnet_floor"])
     elif family == "stealth_accumulation":
         cond &= feat["stock_posnet_pct_cs"] >= float(spec["stock_posnet_pct_cs"])
-        cond &= feat["stock_net_buy_days_20"] >= float(spec["stock_net_buy_days_20"])
+        cond &= feat["stock_posnet_strong_days_20"] >= float(spec["stock_posnet_strong_days_20"])
         cond &= feat["compression_20"] <= float(spec["compression_20"])
         cond &= feat["prior_abs_ret_20d"] <= float(spec["prior_abs_ret_20d"])
         cond &= feat["warrant_posnet_pct_cs"].fillna(0.0) <= float(spec["warrant_posnet_cap"])
     elif family == "stock_then_warrant_confirmation":
         cond &= feat["stock_posnet_pct_cs"] >= float(spec["stock_posnet_pct_cs"])
-        cond &= feat["stock_net_buy_days_20"] >= float(spec["stock_net_buy_days_20"])
+        cond &= feat["stock_posnet_strong_days_20"] >= float(spec["stock_posnet_strong_days_20"])
         cond &= feat["warrant_posnet_pct_cs"].fillna(0.0) >= float(spec["warrant_posnet_floor"])
-        cond &= feat["warrant_net_buy_days_20"].fillna(0.0) >= float(spec["warrant_net_buy_days_20"])
+        cond &= feat["warrant_posnet_strong_days_20"].fillna(0.0) >= float(spec["warrant_posnet_strong_days_20"])
         cond &= feat["prior_abs_ret_20d"] <= float(spec["prior_abs_ret_20d"])
     elif family == "accumulation_during_compression":
         cond &= feat["stock_posnet_pct_cs"] >= float(spec["stock_posnet_pct_cs"])
@@ -355,13 +371,13 @@ def _apply_event_spec(feat: pd.DataFrame, spec: dict[str, object]) -> pd.Series:
         cond &= feat["prior_abs_ret_20d"] <= float(spec["prior_abs_ret_20d"])
     elif family == "warrant_leads_stock":
         cond &= feat["warrant_posnet_pct_cs"].fillna(0.0) >= float(spec["warrant_posnet_floor"])
-        cond &= feat["warrant_net_buy_days_20"].fillna(0.0) >= float(spec["warrant_net_buy_days_20"])
+        cond &= feat["warrant_posnet_strong_days_20"].fillna(0.0) >= float(spec["warrant_posnet_strong_days_20"])
         cond &= feat["stock_posnet_pct_cs"] >= float(spec["stock_posnet_floor"])
         cond &= feat["stock_posnet_pct_cs"] <= float(spec["stock_posnet_cap"])
         cond &= feat["prior_abs_ret_20d"] <= float(spec["prior_abs_ret_20d"])
     elif family == "accumulation_pre_breakout":
         cond &= feat["stock_posnet_pct_cs"] >= float(spec["stock_posnet_pct_cs"])
-        cond &= feat["stock_net_buy_days_20"] >= float(spec["stock_net_buy_days_20"])
+        cond &= feat["stock_posnet_strong_days_20"] >= float(spec["stock_posnet_strong_days_20"])
         cond &= feat["breakout_gap_20"].fillna(1.0) <= float(spec["breakout_gap_20_cap"])
         cond &= feat["breakout_gap_20"].fillna(-1.0) >= -0.08
         cond &= feat["volume_ratio_5_20"].fillna(np.inf) <= float(spec["volume_ratio_5_20_cap"])
@@ -578,12 +594,22 @@ def summarize_candidate(signals: pd.DataFrame, trades: pd.DataFrame, spec: dict[
     test_pass, test_fails = _criteria_test(test_metrics)
 
     robustness_score = 0.0
+    if np.isfinite(full_metrics["avg_net_ret"]):
+        robustness_score += 2.0 * full_metrics["avg_net_ret"]
+    if np.isfinite(full_metrics["median_net_ret"]):
+        robustness_score += full_metrics["median_net_ret"]
+    if np.isfinite(full_metrics["avg_mfe_20d"]):
+        robustness_score += full_metrics["avg_mfe_20d"]
     if np.isfinite(full_metrics["avg_mfe_40d"]):
         robustness_score += 2.0 * full_metrics["avg_mfe_40d"]
     if np.isfinite(full_metrics["mfe_20d_hit_10"]):
         robustness_score += full_metrics["mfe_20d_hit_10"]
+    if np.isfinite(full_metrics["mfe_40d_hit_20"]):
+        robustness_score += full_metrics["mfe_40d_hit_20"]
     if np.isfinite(full_metrics["payoff_ratio"]) and not math.isinf(full_metrics["payoff_ratio"]):
-        robustness_score += 0.25 * full_metrics["payoff_ratio"]
+        robustness_score += 0.35 * full_metrics["payoff_ratio"]
+    if np.isfinite(full_metrics["profit_factor"]) and not math.isinf(full_metrics["profit_factor"]):
+        robustness_score += 0.10 * full_metrics["profit_factor"]
     if np.isfinite(test_metrics["avg_net_ret"]):
         robustness_score += test_metrics["avg_net_ret"]
     if np.isfinite(test_metrics["avg_mfe_20d"]):
@@ -622,6 +648,32 @@ def build_report(
     rejected: pd.DataFrame,
     best_trades: pd.DataFrame,
 ) -> str:
+    family_explanations = {
+        "accumulation_pre_breakout": [
+            "extreme stock-chip accumulation with muted prior price reaction can indicate inventory absorption before a cleaner breakout",
+            "warrant confirmation helps separate real sponsorship from shallow one-day bursts",
+        ],
+        "warrant_leads_stock": [
+            "warrant-side activity can move earlier than the underlying when informed or anticipatory flow reaches leverage instruments first",
+            "keeping stock-chip strength in a mid-high but not fully crowded zone helps avoid already overreacted names",
+        ],
+        "stock_then_warrant_confirmation": [
+            "persistent stock-chip accumulation followed by warrant participation may mark a transition from quiet inventory build to broader recognition",
+            "the warrant leg acts as delayed confirmation rather than initial hype",
+        ],
+        "stealth_accumulation": [
+            "stock-chip strength without hot warrant participation may capture quieter accumulation before public attention expands",
+            "compression and low prior reaction keep the setup focused on under-reacted names",
+        ],
+        "extreme_accum_compression": [
+            "highly concentrated broker accumulation during compression can signal tight supply before repricing",
+            "warrant participation adds a secondary confirmation layer without requiring a full breakout first",
+        ],
+        "accumulation_during_compression": [
+            "strong broker sponsorship while price remains compressed can indicate inventory transfer before expansion",
+            "capping price position helps avoid late entries after the move has already started",
+        ],
+    }
     lines = ["# Rare Event Strategy Report", ""]
     if best_row is None:
         lines.extend(
@@ -665,6 +717,14 @@ def build_report(
         .sort_index()
     )
 
+    explanation_lines = family_explanations.get(
+        str(best_row["family"]),
+        [
+            "broker and warrant flow can reveal sponsorship before the price move is fully visible in OHLC alone",
+            "strict event definitions aim to keep only asymmetric setups with controllable downside",
+        ],
+    )
+
     lines.extend(
         [
             f"## Best Event: {best_row['event_name']}",
@@ -699,8 +759,7 @@ def build_report(
     lines.extend(
         [
             "- explanation of why the event may work:",
-            "  - extreme stock-chip accumulation plus price compression can indicate inventory absorption before public price response",
-            "  - warrant confirmation or divergence helps separate broad hype from delayed recognition",
+            *[f"  - {line}" for line in explanation_lines],
             "- risks and failure modes:",
             "  - low sample count can still overstate asymmetry",
             "  - broker behavior may drift when market structure changes",
@@ -828,16 +887,26 @@ def main() -> None:
             best_trades = trades.copy()
             continue
 
-        current_score = (bool(row["all_pass"]), float(row["robustness_score"]), float(row["full_avg_mfe_40d"]) if pd.notna(row["full_avg_mfe_40d"]) else -np.inf)
-        best_score = (bool(best_row["all_pass"]), float(best_row["robustness_score"]), float(best_row["full_avg_mfe_40d"]) if pd.notna(best_row["full_avg_mfe_40d"]) else -np.inf)
+        current_score = (
+            bool(row["all_pass"]),
+            float(row["robustness_score"]),
+            float(row["full_avg_net_ret"]) if pd.notna(row["full_avg_net_ret"]) else -np.inf,
+            float(row["full_avg_mfe_40d"]) if pd.notna(row["full_avg_mfe_40d"]) else -np.inf,
+        )
+        best_score = (
+            bool(best_row["all_pass"]),
+            float(best_row["robustness_score"]),
+            float(best_row["full_avg_net_ret"]) if pd.notna(best_row["full_avg_net_ret"]) else -np.inf,
+            float(best_row["full_avg_mfe_40d"]) if pd.notna(best_row["full_avg_mfe_40d"]) else -np.inf,
+        )
         if current_score > best_score:
             best_row = pd.Series(row)
             best_signals = signals.copy()
             best_trades = trades.copy()
 
     leaderboard = pd.DataFrame(leaderboard_rows).sort_values(
-        ["all_pass", "robustness_score", "full_avg_mfe_40d", "full_avg_net_ret"],
-        ascending=[False, False, False, False],
+        ["all_pass", "robustness_score", "full_avg_net_ret", "full_avg_mfe_40d", "full_payoff_ratio"],
+        ascending=[False, False, False, False, False],
     ).reset_index(drop=True)
     leaderboard.to_csv(out_dir / "rare_event_leaderboard.csv", index=False)
     build_family_summary(leaderboard).to_csv(out_dir / "rare_event_family_summary.csv", index=False)

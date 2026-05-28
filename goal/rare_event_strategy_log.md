@@ -479,3 +479,124 @@
   - 哪一條更適合作為新的主 baseline
 - 保留 `high-asymmetry branch` 作為目前最強 baseline，不要把兩條線混在一起
 - 補報告中的 best / failed examples，讓事件邏輯更可解釋
+
+## 2026-05-28 Correction And Rerun
+
+### Feature Definition Correction
+
+這輪先做了必要的 feature 修正：
+
+- 舊版 `stock_net_buy_days_20` / `warrant_net_buy_days_20`
+  - 是用 `net_total > 0` 的 rolling count 定義
+  - 這個定義不夠自洽，因為同一檔股票同一天跨所有券商加總的 `buy - sell` 理論上應接近 `0`
+  - 因此它更像 ETL / 對齊殘差，不應直接拿來代表「偏買方日」
+
+修正後的新定義是：
+
+- `stock_posnet_strong_days_20`
+  - 以 `stock_posnet_pct_cs >= 0.95` 的日數做 rolling count
+- `warrant_posnet_strong_days_20`
+  - 以 `warrant_posnet_pct_cs >= 0.80` 的日數做 rolling count
+
+也就是說，現在 persistence 的語意改成：
+
+- 最近 20 日裡，有幾天屬於全市場相對強的正向籌碼日
+
+而不是：
+
+- 最近 20 日裡，有幾天碰巧出現 `net_total > 0` 的殘差
+
+因此，這份日誌在本節之前所有直接依賴 `stock_net_buy_days_20` 的 rare-event 結論，都應視為已被新版 rerun supersede。
+
+### Search Space Correction
+
+修正 feature 後，我先驗了新的 search 行為：
+
+- 原始 coarse grid 仍保留全部 family，但 `accumulation_pre_breakout` 會讓 spec 數衝到 `4720`
+- 這對本地 rerun 太慢，也不符合這輪要先做正確性修復的目的
+
+因此我把主 pipeline 的 grid 收斂成：
+
+- 全 family 都保留
+- `accumulation_pre_breakout` 改成較小但仍嚴格的 coarse grid
+- 之後再把 `warrant_leads_stock` 的 stop-loss 小區域正式納回主 pipeline
+
+最終主 pipeline 這輪是 `312` 個 candidate spec。
+
+### Corrected Main Baseline
+
+修正後的 best event 已經不再是舊的高頻 `accumulation_pre_breakout` baseline，而是切到真正更像 rare-event 的：
+
+- `family = warrant_leads_stock`
+- `hold_days = 40`
+- `cooldown_days = 15`
+- `prior_abs_ret_20d <= 0.08`
+- `stock_posnet_floor >= 0.70`
+- `stock_posnet_cap <= 0.90`
+- `warrant_posnet_floor >= 0.98`
+- `warrant_posnet_strong_days_20 >= 3`
+- `stop_loss = -10%`
+
+對應結果現在寫在 `output/best_rare_event_report.md`：
+
+- `full_trades = 81`
+- `full_avg_net_ret = 0.0913`
+- `full_median_net_ret = 0.0287`
+- `full_avg_mfe_20d = 0.1508`
+- `full_avg_mfe_40d = 0.2395`
+- `full_profit_factor = 3.0039`
+- `full_payoff_ratio = 2.9306`
+- `full_max_loss = -10.43%`
+- `test_trades = 14`
+- `test_avg_net_ret = 0.0321`
+
+這組是 corrected rerun 後，第一個真正兼顧：
+
+- 較低頻
+- clear event logic
+- 有正式 stop-loss
+- 並且仍滿足 `new_goal.md` full/test 門檻
+
+### Corrected Passing Set
+
+這輪 corrected main pipeline 的整體狀態：
+
+- `all_pass_count = 13`
+- 主 pass family 主要來自：
+  - `warrant_leads_stock`
+  - `accumulation_pre_breakout`
+
+其中比較值得保留的 pass 區域是：
+
+1. `warrant_leads_stock`
+   - `h40 / cd15 / prior_abs_ret_20d<=0.08 / stock_posnet 0.70~0.90 / warrant_posnet_floor>=0.98 / warrant_posnet_strong_days_20>=3 / stop_loss=-10%`
+   - `81` trades
+   - 更接近 rare-event 方向
+
+2. `warrant_leads_stock`
+   - `h30 / cd15 / prior_abs_ret_20d<=0.12 / warrant_posnet_floor>=0.99 / stop_loss=-12%`
+   - `56` trades
+   - 更少交易，平均報酬仍高
+
+3. `accumulation_pre_breakout`
+   - 修正後仍然有 pass candidate
+   - 但交易數約 `500+`
+   - 已不再適合作為這輪 rare-event 研究的主 baseline
+
+### Interpretation
+
+這次 correction 的核心結論是：
+
+- 舊版錯誤 feature 沒有把整條 rare-event 線推翻
+- 但它確實把主 baseline 偏向了較高頻的 `accumulation_pre_breakout`
+- feature 修正後，真正更符合目標的主 baseline 反而浮到 `warrant_leads_stock`
+
+也就是：
+
+- 「權證端先領先、正股仍在中高但未擁擠區、且先前價格反應不大」
+
+比起：
+
+- 「正股先累積、準備 breakout」
+
+更像這輪 corrected research 真正找到的 rare-event 主方向。
