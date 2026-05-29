@@ -48,6 +48,32 @@ Closest current strategy family:
   - `top_posnet_ratio`
   - day-level `mean_buy20`
 
+True branch-level scan:
+
+- script: `apps/analysis/run_key_broker_branch_scan.py`
+- artifact report: `outputs/analysis/key_broker_branch/key_broker_branch_report.md`
+- artifact leaderboard: `outputs/analysis/key_broker_branch/key_broker_branch_leaderboard.csv`
+- scope:
+  - all current 4-digit non-ETF stock parquet files with OHLC coverage
+  - signal window `2025-10-01` to `2026-02-03`
+  - history start `2025-07-01`
+  - feature rows evaluated: `193459`
+  - focused grid candidates: `16`
+- result:
+  - passing candidates: `0`
+  - best branch-level standalone rule:
+    - `window_days=3`
+    - `window_net_ratio >= 8.0`
+    - `branch_buy_share >= 0.12`
+    - `window_net_buy_ratio >= 0.60`
+    - `branch_posnet_share >= 0.20`
+    - `hold_days=20`
+    - `cooldown_days=15`
+  - trades: `2131`
+  - win rate: `0.4139`
+  - mean net return: `0.0073`
+  - median net return: `-0.0094`
+
 Best current standalone rare-event candidate in this family:
 
 - event name: `accumulation_pre_breakout__h30__cd15__breakout_gap_20_cap-0p02__stock_posnet_pct_cs-0p98__stock_posnet_strong_days_20-3__stop_loss--0p1__volume_ratio_5_20_cap-1p8__warrant_posnet_floor-0p5`
@@ -61,11 +87,12 @@ Best current standalone rare-event candidate in this family:
 Verdict:
 
 - This direction has signal value, especially as a filter for direction 3.
-- As a standalone strategy, the current full-window average return is below the `10%` target.
-- The next useful research step is to convert this from aggregate concentration into true branch-level key-broker behavior:
-  - broker-specific abnormal buy streaks
-  - branch persistence by stock
-  - branch concentration before price reaction
+- As a standalone strategy, both the aggregate rare-event version and the true branch-level scan are below the target.
+- The branch-level result is especially important: naive "specific branch abnormal buying" alone is too noisy and does not beat the target.
+- The next useful research step is to keep branch-level features, but attach them to price/warrant context instead of using them as a standalone entry trigger:
+  - branch-specific abnormal buy streaks before breakout
+  - branch persistence by stock combined with low prior price reaction
+  - branch concentration plus warrant confirmation
   - exclusion of already overheated names
 
 ## Direction 2: Warrant Concentrated Buying / Warrant Leads Stock
@@ -138,7 +165,7 @@ Verdict:
 
 1. Direction 3 plus direction 1 filter: primary candidate, target met.
 2. Direction 2: good rare-event candidate, target almost met, useful confirmation layer.
-3. Direction 1 standalone: useful signal family, but current standalone average return is not high enough.
+3. Direction 1 standalone: useful signal family, but current true branch-level standalone scan fails both win-rate and return targets.
 
 ## Next Research Step
 
@@ -147,4 +174,4 @@ The next high-value step is not another broad grid search. It is to harden the p
 - extend the same replay to newer OOF data when available
 - add leave-one-symbol-out and leave-one-month-out checks for `repair_branch_topratio0610_daybuy20ge4`
 - inspect the 12 trades manually for liquidity, limit-up execution risk, and repeated-symbol concentration
-- build a true key-broker branch feature set for direction 1 instead of only using aggregate chip concentration
+- merge the new key-broker branch features into the direction 3 breakout candidate as an additional quality/context layer

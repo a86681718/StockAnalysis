@@ -1147,3 +1147,50 @@
   - 以目前 repo 內可用的 walk-forward / replay 證據來看，目標已經達成。
   - 這不代表策略未來不需要再監控，而是代表：
     - 在目前資料與驗證框架下，已經找到一個符合 success criteria 的 strongest validated candidate。
+
+## Attempt 2026-05-29 / True Key-Broker Branch Standalone Scan
+
+- scope:
+  - 針對使用者方向 1「特定券商分點異常買賣推升股價」補一個真正 branch-level 的全市場 baseline。
+  - 不再只看 aggregate `top_posnet_ratio` / `stock_net_buy_days_20`，而是直接讀每檔股票的券商分點 parquet。
+- tool:
+  - `apps/analysis/run_key_broker_branch_scan.py`
+- artifacts:
+  - `outputs/analysis/key_broker_branch/key_broker_branch_report.md`
+  - `outputs/analysis/key_broker_branch/key_broker_branch_leaderboard.csv`
+  - `outputs/analysis/key_broker_branch/best_key_broker_branch_signals.parquet`
+  - `outputs/analysis/key_broker_branch/best_key_broker_branch_trades.csv`
+- run setup:
+  - universe: all 4-digit non-ETF stock parquet files with OHLC coverage
+  - signal window: `2025-10-01 ~ 2026-02-03`
+  - history start: `2025-07-01`
+  - feature rows evaluated: `193459`
+  - per symbol/window feature cap: `50`
+  - focused candidate grid: `16`
+  - pass gate: `trades >= 20`, `win_rate > 0.50`, `avg_net_ret > 0.10`
+- best standalone branch-level rule:
+  - `window_days = 3`
+  - `window_net_ratio >= 8.0`
+  - `branch_buy_share >= 0.12`
+  - `window_net_buy_ratio >= 0.60`
+  - `branch_posnet_share >= 0.20`
+  - `hold_days = 20`
+  - `cooldown_days = 15`
+  - no stop-loss
+- result:
+  - `passing_candidates = 0 / 16`
+  - best rule:
+    - `trades = 2131`
+    - `win_rate = 0.4139`
+    - `avg_net_ret = 0.0073`
+    - `median_net_ret = -0.0094`
+    - `profit_factor = 1.2529`
+    - `avg_mfe = 0.0843`
+    - `avg_mae = -0.0546`
+    - `max_loss = -0.3267`
+- interpretation:
+  - 真正 branch-level 的「分點異常買超」單獨看非常吵，沒有達到 `>50%` 勝率或 `>10%` 平均報酬。
+  - 這和目前主策略的結論一致：分點/籌碼持續性有價值，但比較適合當 direction 3 breakout 策略的 quality filter，而不是單獨進場條件。
+  - 後續若要繼續推 direction 1，應該把 branch-level features 接回 breakout / warrant context，而不是只加嚴單純買超門檻。
+- status:
+  - `Standalone direction 1 baseline failed; keep as filter/feature line`
