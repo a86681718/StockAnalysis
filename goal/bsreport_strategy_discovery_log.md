@@ -1330,3 +1330,46 @@ candidate label diagnostics:
 
 - status:
   - `True branch overlay supports context-feature use, not hard gating`
+
+## Attempt 2026-05-29 / Strategy Forward Readiness Audit
+
+- scope:
+  - 不新增參數、不重搜 grid，只檢查目前兩個 target-clearing candidate 是否能用現有 repo artifact 往更新資料做 forward replay。
+- tool:
+  - `apps/analysis/run_strategy_forward_readiness_audit.py`
+- outputs:
+  - `outputs/analysis/strategy_forward_readiness/strategy_forward_readiness_report.md`
+  - `outputs/analysis/strategy_forward_readiness/strategy_forward_readiness_summary.json`
+  - `outputs/analysis/strategy_forward_readiness/direction3_artifact_date_coverage.csv`
+  - `outputs/analysis/strategy_forward_readiness/direction2_artifact_date_coverage.csv`
+  - `outputs/analysis/strategy_forward_readiness/direction2_pending_signals.csv`
+
+### Results
+
+Direction 3:
+
+- OHLC max date: `2026-02-26`
+- trusted `breakout10_predictions_wf.csv` max date: `2026-02-03`
+- weaker `breakout10_predictions_all_wf.csv` max date: `2026-02-26`
+- filtered strategy signal max date: `2026-01-22`
+- saved trade exit max date: `2026-02-25`
+- current saved metrics remain:
+  - trades: `12`
+  - win rate: `1.0000`
+  - avg net return: `0.2770`
+
+Direction 2:
+
+- feature max date: `2026-02-26`
+- fixed-rule signal max date: `2026-02-23`
+- saved full-trade signal max date: `2025-12-16`
+- last complete 40-trading-day signal date from OHLC: `2025-12-18`
+- pending fixed-rule signals: `16`, dated `2025-12-23` to `2026-02-23`
+
+### Interpretation
+
+- 這輪確認目前不是該繼續 broad grid search。
+- Direction 3 要往前驗，缺的是 `2026-02-03` 之後同等可信的 OOF / walk-forward prediction artifact；不能拿 `all_wf` 直接替代正式結論。
+- Direction 2 已經有更新訊號，但因為策略使用 `40` 個交易日持有/觀察期，OHLC 只到 `2026-02-26` 時，`2025-12-23` 之後訊號都還不能算完整結果。
+- status:
+  - `Forward replay blocked by trusted prediction coverage for direction 3 and horizon completion for direction 2`

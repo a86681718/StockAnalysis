@@ -717,3 +717,28 @@ leave-one-month 結果：
 - 這輪是 `43,920` specs 的 refinement，multiple-testing risk 明顯高於主 pipeline coarse scan
 - 月份敏感性仍存在
 - 下一步應該做更嚴格的 forward / out-of-sample replay，而不是繼續放大 grid
+
+## 2026-05-29 Direction 2 Forward Readiness Audit
+
+這輪沒有再調整 `warrant_leads_stock` 條件，只檢查固定最佳規則在目前資料尾端的可驗證狀態。
+
+- script: `apps/analysis/run_strategy_forward_readiness_audit.py`
+- report: `outputs/analysis/strategy_forward_readiness/strategy_forward_readiness_report.md`
+- pending signal export: `outputs/analysis/strategy_forward_readiness/direction2_pending_signals.csv`
+
+結果：
+
+- feature max date: `2026-02-26`
+- fixed-rule signal max date: `2026-02-23`
+- saved full-trade signal max date: `2025-12-16`
+- saved trade exit max date: `2026-02-24`
+- last complete 40-trading-day signal date from OHLC: `2025-12-18`
+- total fixed-rule signals: `68`
+- signals with saved full trade: `52`
+- pending signals: `16`
+- pending date range: `2025-12-23` to `2026-02-23`
+
+判斷：
+
+- 方向 2 已有後續固定規則訊號，但現在不能把它們當成完成回測結果。
+- 下一步是等 OHLC 補到足夠覆蓋 40 個交易日後，直接評分這 16 筆 pending signals，不要重新調參。

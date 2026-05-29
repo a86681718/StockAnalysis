@@ -19,6 +19,7 @@ The strongest high-return strategy so far is direction 3, with direction 1 used 
 - artifact trades: `data/_derived/ml_runs/repair_branch_topratio0610_daybuy20ge4_trades.csv`
 - artifact rolling windows: `data/_derived/ml_runs/repair_branch_topratio0610_daybuy20ge4_rolling_windows.csv`
 - robustness report: `outputs/analysis/direction3_breakout_robustness/direction3_breakout_robustness_report.md`
+- forward-readiness report: `outputs/analysis/strategy_forward_readiness/strategy_forward_readiness_report.md`
 
 Verified result on the current walk-forward validation window:
 
@@ -230,6 +231,36 @@ Verdict:
 - True branch-level overlay supports keeping branch behavior as a context feature, not as a hard gate.
 - Main weakness is still sample size and the need for newer out-of-sample replay data, not current return quality.
 
+## Forward Readiness / Newer Data Boundary
+
+The current repo state can audit the saved target-clearing candidates, but it cannot honestly claim a newer forward replay beyond the saved trusted windows.
+
+Audit artifact:
+
+- script: `apps/analysis/run_strategy_forward_readiness_audit.py`
+- report: `outputs/analysis/strategy_forward_readiness/strategy_forward_readiness_report.md`
+- summary: `outputs/analysis/strategy_forward_readiness/strategy_forward_readiness_summary.json`
+
+Direction 3 boundary:
+
+- OHLC max date: `2026-02-26`
+- trusted `breakout10_predictions_wf.csv` max date: `2026-02-03`
+- weaker `breakout10_predictions_all_wf.csv` max date: `2026-02-26`
+- saved filtered strategy signal max date: `2026-01-22`
+- saved trade exit max date: `2026-02-25`
+- last complete 16-trading-day signal date from OHLC: `2026-01-23`
+- conclusion: do not extend the current direction-3 conclusion with `all_wf`; regenerate trusted OOF / walk-forward predictions after `2026-02-03`, then replay the exact fixed rule.
+
+Direction 2 boundary:
+
+- feature max date: `2026-02-26`
+- refined signal max date: `2026-02-23`
+- saved full-trade signal max date: `2025-12-16`
+- last complete 40-trading-day signal date from OHLC: `2025-12-18`
+- pending signals: `16`, dated `2025-12-23` to `2026-02-23`
+- pending signal export: `outputs/analysis/strategy_forward_readiness/direction2_pending_signals.csv`
+- conclusion: direction 2 already has later fixed-rule signals, but the 40-day horizon is not fully observable until more OHLC data arrives.
+
 ## Ranking
 
 1. Direction 3 plus direction 1 filter: primary candidate, target met.
@@ -241,6 +272,8 @@ Verdict:
 The next high-value step is not another broad grid search. It is to harden the two target-clearing candidates:
 
 - extend the same replay to newer OOF data when available
+- for direction 3, regenerate trusted OOF / walk-forward breakout predictions after `2026-02-03`, then replay the same fixed thresholds
+- for direction 2, wait for enough OHLC to complete the `2025-12-23` to `2026-02-23` pending signals, then score them without changing thresholds
 - inspect direction 3 trades manually for qualitative market context; quantitative liquidity/gap checks are now saved
 - derive lighter branch-level context features for the direction 3 model/day filter, because strict standalone branch gating failed the overlay check
 - add a stricter out-of-sample or forward replay for `warrant_leads_stock_refine`, because the current direction-2 result came from a broad parameter scan
