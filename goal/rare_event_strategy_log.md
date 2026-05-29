@@ -20,14 +20,14 @@
 
 第一版固定輸出：
 
-- `output/features_stock_daily.parquet`
-- `output/rare_event_signals.parquet`
-- `output/trades.parquet`
-- `output/rare_event_leaderboard.csv`
-- `output/rare_event_family_summary.csv`
-- `output/best_event_concentration.csv`
-- `output/best_rare_event_report.md`
-- `output/rejected_rare_events.csv`
+- `outputs/analysis/rare_event/features_stock_daily.parquet`
+- `outputs/analysis/rare_event/rare_event_signals.parquet`
+- `outputs/analysis/rare_event/trades.parquet`
+- `outputs/analysis/rare_event/rare_event_leaderboard.csv`
+- `outputs/analysis/rare_event/rare_event_family_summary.csv`
+- `outputs/analysis/rare_event/best_event_concentration.csv`
+- `outputs/analysis/rare_event/best_rare_event_report.md`
+- `outputs/analysis/rare_event/rejected_rare_events.csv`
 
 ## Attempt 2026-05-27 / First Rare-Event Pipeline
 
@@ -128,8 +128,8 @@
 
 這一輪又往前補了兩個 artifact：
 
-- `output/rare_event_family_summary.csv`
-- `output/best_event_concentration.csv`
+- `outputs/analysis/rare_event/rare_event_family_summary.csv`
+- `outputs/analysis/rare_event/best_event_concentration.csv`
 
 目前看到的 family-level 結論很清楚：
 
@@ -174,7 +174,7 @@
 
 我另外對目前最佳 candidate 做了：
 
-- `output/best_event_leave_one_symbol_out.csv`
+- `outputs/analysis/rare_event/best_event_leave_one_symbol_out.csv`
 
 檢查方式是：
 
@@ -218,7 +218,7 @@
 
 我另外做了一輪只圍繞目前最佳 family 的局部掃描：
 
-- `output/accumulation_pre_breakout_local_sensitivity.csv`
+- `outputs/analysis/rare_event/accumulation_pre_breakout_local_sensitivity.csv`
 
 掃描的局部範圍是：
 
@@ -292,7 +292,7 @@
 
 我接著直接對一條代表性的 higher-sample near-miss 做了簡單止損掃描：
 
-- `output/accumulation_pre_breakout_higher_sample_sl_scan.csv`
+- `outputs/analysis/rare_event/accumulation_pre_breakout_higher_sample_sl_scan.csv`
 
 代表 near-miss base 設定是：
 
@@ -413,7 +413,7 @@
 
 我也對新的主 baseline 做了：
 
-- `output/best_event_leave_one_symbol_out_v2.csv`
+- `outputs/analysis/rare_event/best_event_leave_one_symbol_out_v2.csv`
 
 這次結果比舊 baseline 更穩：
 
@@ -537,7 +537,7 @@
 - `warrant_posnet_strong_days_20 >= 3`
 - `stop_loss = -10%`
 
-對應結果現在寫在 `output/best_rare_event_report.md`：
+對應結果現在寫在 `outputs/analysis/rare_event/best_rare_event_report.md`：
 
 - `full_trades = 81`
 - `full_avg_net_ret = 0.0913`

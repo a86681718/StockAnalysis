@@ -11,6 +11,7 @@ import pandas as pd
 from datetime import datetime
 from DrissionPage import ChromiumPage, ChromiumOptions
 from google.cloud import firestore, storage
+from src.stockanalysis.config import ensure_dir, resolve_output
 # Suppress SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -217,8 +218,7 @@ def main():
     logging.info(f"Received symbols: {symbols}")
     logging.info(f"Data date: {data_dt}")
 
-    output_dir = "./output/"
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir = ensure_dir(resolve_output("tmp", "tpex_bs_report"))
 
     fs_client = firestore.Client()
     # Process each symbol
@@ -236,7 +236,7 @@ def main():
         except Exception as e:
             logging.error(f"Failed to access Firestore for symbol {symbol}: {e}")
             continue
-        output_path = os.path.join(output_dir, f"{symbol}.csv")
+        output_path = str(output_dir / f"{symbol}.csv")
         success = False
         retries = 0 
         while retries < 3 and not success:

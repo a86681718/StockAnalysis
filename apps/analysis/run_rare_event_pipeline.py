@@ -26,7 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.stockanalysis.config import ensure_dir
+from src.stockanalysis.config import ensure_dir, resolve_output
 
 STOCK_STRONG_POSNET_PCT = 0.95
 WARRANT_STRONG_POSNET_PCT = 0.80
@@ -847,7 +847,7 @@ def build_best_event_concentration(best_trades: pd.DataFrame) -> pd.DataFrame:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Rare-event strategy discovery pipeline")
-    ap.add_argument("--output-dir", type=str, default=str(PROJECT_ROOT / "output"))
+    ap.add_argument("--output-dir", type=str, default=str(resolve_output("analysis", "rare_event")))
     args = ap.parse_args()
 
     out_dir = ensure_dir(Path(args.output_dir))

@@ -12,12 +12,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.stockanalysis.config import ensure_dir
+from src.stockanalysis.config import ensure_dir, resolve_output
 
 
 DOCS_DIR = PROJECT_ROOT / "docs"
-TRADES_PATH = PROJECT_ROOT / "output" / "trades.parquet"
-REPORT_PATH = PROJECT_ROOT / "output" / "best_rare_event_report.md"
+RARE_EVENT_DIR = resolve_output("analysis", "rare_event")
+TRADES_PATH = RARE_EVENT_DIR / "trades.parquet"
+REPORT_PATH = RARE_EVENT_DIR / "best_rare_event_report.md"
 OHLC_PATH = PROJECT_ROOT / "data" / "_derived" / "ohlc.parquet"
 OUTPUT_HTML = DOCS_DIR / "rare-event-trade-explorer.html"
 
@@ -383,7 +384,7 @@ def _render_html(payload: dict[str, object], report_text: str) -> str:
         <p class="lede">這個頁面只用目前最佳策略的真實交易。左邊選案例，右邊看 K 線、成交量、進出場、停損與實際回測指標。圖表可滑鼠拖曳縮放、滾輪 zoom，或用下方 data zoom slider 精細檢查。</p>
         <div class="chips">
           <span class="chip" id="event-name-chip"></span>
-          <span class="chip">資料來源: `output/trades.parquet` + `data/_derived/ohlc.parquet`</span>
+          <span class="chip">資料來源: `outputs/analysis/rare_event/trades.parquet` + `data/_derived/ohlc.parquet`</span>
           <span class="chip">圖上區間: 訊號前 25 根 + 出場後 15 根</span>
         </div>
       </div>
