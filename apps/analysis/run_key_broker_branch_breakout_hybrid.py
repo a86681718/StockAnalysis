@@ -214,12 +214,14 @@ def evaluate_spec(
     selected = select_signals(signals, spec, score_thresholds)
     trades = simulate_trades(selected, ohlc_maps, int(spec["hold_days"]), spec["stop_loss"])
     metrics = trade_metrics(trades)
+    stability = stability_summary(trades, min_trades)
     row = {
         "target_pass": target_pass(metrics, min_trades),
         "signal_count": int(len(selected)),
         "params_json": json.dumps(spec, sort_keys=True),
         **spec,
         **metrics,
+        **stability,
     }
     return row, selected, trades
 
@@ -249,6 +251,24 @@ def month_leave_one(trades: pd.DataFrame, min_trades: int) -> pd.DataFrame:
     return leave_one_table(work, "signal_month", min_trades)
 
 
+def stability_summary(trades: pd.DataFrame, min_trades: int) -> dict[str, object]:
+    checks = {
+        "symbol": leave_one_table(trades, "symbol", min_trades),
+        "month": month_leave_one(trades, min_trades),
+        "broker": leave_one_table(trades, "broker", min_trades),
+    }
+    out: dict[str, object] = {}
+    for name, table in checks.items():
+        groups = int(len(table))
+        pass_count = int(table["target_pass"].sum()) if not table.empty else 0
+        out[f"leave_one_{name}_groups"] = groups
+        out[f"leave_one_{name}_pass_count"] = pass_count
+        out[f"leave_one_{name}_pass_ratio"] = float(pass_count / groups) if groups else np.nan
+        out[f"leave_one_{name}_worst_avg_net_ret"] = float(table["avg_net_ret"].min()) if not table.empty else np.nan
+        out[f"leave_one_{name}_min_trades"] = int(table["trades"].min()) if not table.empty else 0
+    return out
+
+
 def _fmt_float(value: object, digits: int = 4) -> str:
     try:
         value_f = float(value)
@@ -269,6 +289,15 @@ def build_report(
     loo_broker: pd.DataFrame,
     args: argparse.Namespace,
 ) -> str:
+    passing = leaderboard[leaderboard["target_pass"]].copy() if not leaderboard.empty else pd.DataFrame()
+    if passing.empty:
+        best_passing_month = 0
+        best_passing_month_groups = 0
+    else:
+        idx = passing["leave_one_month_pass_count"].idxmax()
+        best_passing_month = int(passing.loc[idx, "leave_one_month_pass_count"])
+        best_passing_month_groups = int(passing.loc[idx, "leave_one_month_groups"])
+
     lines = [
         "# Key Broker Branch Breakout Hybrid Scan",
         "",
@@ -279,6 +308,7 @@ def build_report(
         f"- min target gate: `trades >= {args.min_trades}`, `win_rate > 0.50`, `avg_net_ret > 0.10`",
         f"- scanned candidates: `{len(leaderboard)}`",
         f"- passing candidates: `{int(leaderboard['target_pass'].sum()) if not leaderboard.empty else 0}`",
+        f"- best leave-one-month pass among passing candidates: `{best_passing_month} / {best_passing_month_groups}`",
         "",
         "## Baseline",
         "",
@@ -307,12 +337,16 @@ def build_report(
             f"- profit factor: `{_fmt_float(best['profit_factor'])}`",
             f"- average MFE / MAE: `{_fmt_float(best['avg_mfe'])}` / `{_fmt_float(best['avg_mae'])}`",
             f"- max loss: `{_fmt_float(best['max_loss'])}`",
+            f"- leaderboard leave-one-month pass: `{int(best['leave_one_month_pass_count'])} / {int(best['leave_one_month_groups'])}`",
+            f"- leaderboard leave-one-symbol pass: `{int(best['leave_one_symbol_pass_count'])} / {int(best['leave_one_symbol_groups'])}`",
+            f"- leaderboard leave-one-broker pass: `{int(best['leave_one_broker_pass_count'])} / {int(best['leave_one_broker_groups'])}`",
             "",
             "Interpretation:",
             "",
             "- Strict branch-level abnormal buying is not enough by itself.",
             "- The useful pattern is a much narrower hybrid: strongest branch anomaly score plus the stock reclaiming prior 20-day highs, with volume expansion capped to avoid blowoff entries.",
-            "- This clears the requested gates, but it is still sparse and came from a focused refinement over the failed standalone branch baseline.",
+            "- Leaderboard ranking is now stability-aware, so target-passing rows with better leave-one-month behavior outrank higher-return but more fragile rows.",
+            "- In this focused scan, no target-passing row improves beyond the same weak leave-one-month result, so the month/regime weakness remains.",
             "",
             "## Robustness",
             "",
@@ -349,7 +383,8 @@ def build_report(
     for _, row in leaderboard.head(10).iterrows():
         lines.append(
             f"- `{row['params_json']}`: `pass={row['target_pass']}`, "
-            f"`trades={int(row['trades'])}`, `win={row['win_rate']:.4f}`, `avg={row['avg_net_ret']:.4f}`"
+            f"`trades={int(row['trades'])}`, `win={row['win_rate']:.4f}`, `avg={row['avg_net_ret']:.4f}`, "
+            f"`loo_month={int(row['leave_one_month_pass_count'])}/{int(row['leave_one_month_groups'])}`"
         )
     return "\n".join(lines)
 
@@ -410,6 +445,9 @@ def main() -> None:
         rows.append(row)
         score = (
             bool(row["target_pass"]),
+            int(row["leave_one_month_pass_count"]),
+            int(row["leave_one_symbol_pass_count"]),
+            int(row["leave_one_broker_pass_count"]),
             float(row["avg_net_ret"]) if pd.notna(row["avg_net_ret"]) else -np.inf,
             float(row["win_rate"]) if pd.notna(row["win_rate"]) else -np.inf,
             int(row["trades"]),
@@ -421,6 +459,9 @@ def main() -> None:
             continue
         best_score = (
             bool(best_row["target_pass"]),
+            int(best_row["leave_one_month_pass_count"]),
+            int(best_row["leave_one_symbol_pass_count"]),
+            int(best_row["leave_one_broker_pass_count"]),
             float(best_row["avg_net_ret"]) if pd.notna(best_row["avg_net_ret"]) else -np.inf,
             float(best_row["win_rate"]) if pd.notna(best_row["win_rate"]) else -np.inf,
             int(best_row["trades"]),
@@ -432,8 +473,17 @@ def main() -> None:
 
     leaderboard = pd.DataFrame(rows)
     leaderboard = leaderboard.sort_values(
-        ["target_pass", "avg_net_ret", "win_rate", "trades", "profit_factor"],
-        ascending=[False, False, False, False, False],
+        [
+            "target_pass",
+            "leave_one_month_pass_count",
+            "leave_one_symbol_pass_count",
+            "leave_one_broker_pass_count",
+            "avg_net_ret",
+            "win_rate",
+            "trades",
+            "profit_factor",
+        ],
+        ascending=[False, False, False, False, False, False, False, False],
     ).reset_index(drop=True)
 
     loo_symbol = leave_one_table(best_trades, "symbol", args.min_trades)

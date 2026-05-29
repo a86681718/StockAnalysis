@@ -93,6 +93,7 @@ Direction 1 now has a target-clearing hybrid candidate after adding price/volume
 - leave-one-symbol pass: `22 / 23`
 - leave-one-month pass: `1 / 4`
 - leave-one-broker pass: `18 / 19`
+- stability-aware leaderboard check: no target-passing variant improves beyond `1 / 4` leave-one-month pass
 
 This direction now has a target-clearing branch-driven candidate, but it is weaker than directions 2 and 3 because the sample is small and month robustness is poor. The important structural update is that branch abnormality needs price context; strict branch abnormality alone still fails.
 
@@ -176,6 +177,7 @@ Branch breakout hybrid result:
 - leave-one-symbol target pass: `22 / 23`
 - leave-one-month target pass: `1 / 4`
 - leave-one-broker target pass: `18 / 19`
+- best leave-one-month pass among all target-passing hybrid candidates: `1 / 4`
 
 Verdict:
 
@@ -185,7 +187,7 @@ Verdict:
 - The branch-level result is especially important: naive "specific branch abnormal buying" alone is too noisy and does not beat the target.
 - The direction-3 overlay is also important: strict standalone branch signals should not be used as a hard gate for the current breakout candidate, because they would eliminate all selected trades.
 - Looser branch-level behavior is present in the selected breakout trades, but it is too broad to improve selection by itself.
-- The hybrid branch-breakout candidate is promising but not production-ready because leave-one-month robustness is weak.
+- The stability-aware leaderboard confirms the hybrid branch-breakout candidate is promising but not production-ready because leave-one-month robustness remains weak across all target-passing variants.
 - The next useful research step is to keep branch-level features, but attach them to price/warrant context instead of using them as a standalone entry trigger:
   - branch-specific abnormal buy streaks before breakout
   - branch persistence by stock combined with low prior price reaction

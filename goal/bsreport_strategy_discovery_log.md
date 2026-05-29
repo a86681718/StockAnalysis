@@ -1423,6 +1423,9 @@ Robustness:
 - leave-one-symbol target pass: `22 / 23`
 - leave-one-month target pass: `1 / 4`
 - leave-one-broker target pass: `18 / 19`
+- stability-aware leaderboard:
+  - 每個 spec 現在都計算 leave-one-month / symbol / broker pass count
+  - 所有 target-passing specs 中，最佳 leave-one-month 仍只有 `1 / 4`
 
 ### Interpretation
 
@@ -1432,6 +1435,6 @@ Robustness:
   - 當異常分點買超同時出現在股價站回前 20 日高點、且量能沒有過熱時，才比較像推升行情
 - 但這不是 production-ready：
   - 交易數只有 `24`
-  - leave-one-month 只有 `1 / 4` pass，代表月份/regime 依賴還很明顯
+  - stability-aware ranking 後，leave-one-month 最好仍只有 `1 / 4` pass，代表月份/regime 依賴還很明顯
 - status:
   - `Direction 1 has a target-clearing hybrid candidate; standalone branch trigger remains rejected`
