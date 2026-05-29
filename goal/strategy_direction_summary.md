@@ -18,6 +18,7 @@ The strongest high-return strategy so far is direction 3, with direction 1 used 
 - artifact summary: `data/_derived/ml_runs/repair_branch_topratio0610_daybuy20ge4_summary.json`
 - artifact trades: `data/_derived/ml_runs/repair_branch_topratio0610_daybuy20ge4_trades.csv`
 - artifact rolling windows: `data/_derived/ml_runs/repair_branch_topratio0610_daybuy20ge4_rolling_windows.csv`
+- robustness report: `outputs/analysis/direction3_breakout_robustness/direction3_breakout_robustness_report.md`
 
 Verified result on the current walk-forward validation window:
 
@@ -29,6 +30,12 @@ Verified result on the current walk-forward validation window:
 - median net return: `0.2317`
 - total net return: `0.6625`
 - rolling windows: `6 / 6` windows have positive strict pass behavior in the saved rolling check
+- leave-one-symbol target pass: `9 / 9`
+- leave-one-month target pass: `3 / 3`
+- leave-one-signal-day target pass: `8 / 8`
+- max entry gap in saved trades: `0.0047`
+- entry gaps above the configured `0.5%` cap: `0`
+- minimum entry-day turnover proxy (`close * volume`): `529,363,695`
 
 This candidate clearly exceeds both target gates:
 
@@ -171,6 +178,7 @@ Closest current strategy:
   - `data/_derived/ml_runs/repair_branch_topratio0610_daybuy20ge4_summary.json`
   - `data/_derived/ml_runs/repair_branch_topratio0610_daybuy20ge4_trades.csv`
   - `data/_derived/ml_runs/repair_branch_topratio0610_daybuy20ge4_rolling_windows.csv`
+  - `outputs/analysis/direction3_breakout_robustness/direction3_breakout_robustness_report.md`
 
 Current best rule:
 
@@ -192,12 +200,18 @@ Verified result:
 - win rate: `1.0000`
 - mean net return: `0.2770`
 - rolling strict pass: `6 / 6`
+- leave-one-symbol target pass: `9 / 9`
+- leave-one-month target pass: `3 / 3`
+- leave-one-signal-day target pass: `8 / 8`
+- worst single-trade MAE while held: `-0.1602`
+- entry gap violations above `0.5%`: `0`
 
 Verdict:
 
 - This is the current primary strategy candidate.
 - It satisfies the target gates in the current saved walk-forward evidence.
-- Main weakness is sample size, not return quality.
+- New robustness checks show it is not dependent on one symbol, month, or signal day inside the saved replay.
+- Main weakness is still sample size and the need for newer out-of-sample replay data, not current return quality.
 
 ## Ranking
 
@@ -210,7 +224,6 @@ Verdict:
 The next high-value step is not another broad grid search. It is to harden the two target-clearing candidates:
 
 - extend the same replay to newer OOF data when available
-- add leave-one-symbol-out and leave-one-month-out checks for `repair_branch_topratio0610_daybuy20ge4`
-- inspect the 12 trades manually for liquidity, limit-up execution risk, and repeated-symbol concentration
+- inspect direction 3 trades manually for qualitative market context; quantitative liquidity/gap checks are now saved
 - merge the new key-broker branch features into the direction 3 breakout candidate as an additional quality/context layer
 - add a stricter out-of-sample or forward replay for `warrant_leads_stock_refine`, because the current direction-2 result came from a broad parameter scan

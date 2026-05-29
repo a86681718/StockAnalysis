@@ -1194,3 +1194,60 @@
   - 後續若要繼續推 direction 1，應該把 branch-level features 接回 breakout / warrant context，而不是只加嚴單純買超門檻。
 - status:
   - `Standalone direction 1 baseline failed; keep as filter/feature line`
+
+## Attempt 2026-05-29 / Direction 3 Robustness Audit
+
+- scope:
+  - 針對目前最強 direction 3 candidate 補一個不再搜尋參數的 robustness audit。
+  - 目標是確認 `12` 筆全勝不是只靠單一股票、月份、signal day 或不合理進場 gap 撐出來。
+- tool:
+  - `apps/analysis/run_direction3_breakout_robustness.py`
+- inputs:
+  - `data/_derived/ml_runs/repair_branch_topratio0610_daybuy20ge4_trades.csv`
+  - `data/_derived/ml_runs/repair_branch_topratio0610_daybuy20ge4_summary.json`
+  - `data/_derived/ml_runs/repair_branch_topratio0610_daybuy20ge4_rolling_windows.csv`
+  - `data/_derived/ml_runs/repair_branch_topratio0610_day_chip_quality.csv`
+  - `data/_derived/ohlc.parquet`
+- outputs:
+  - `outputs/analysis/direction3_breakout_robustness/direction3_breakout_robustness_report.md`
+  - `outputs/analysis/direction3_breakout_robustness/direction3_breakout_enriched_trades.csv`
+  - `outputs/analysis/direction3_breakout_robustness/direction3_breakout_concentration.csv`
+  - `outputs/analysis/direction3_breakout_robustness/direction3_breakout_leave_one_symbol_out.csv`
+  - `outputs/analysis/direction3_breakout_robustness/direction3_breakout_leave_one_month_out.csv`
+  - `outputs/analysis/direction3_breakout_robustness/direction3_breakout_leave_one_signal_day_out.csv`
+
+### Results
+
+- full metrics:
+  - `trades = 12`
+  - `win_rate = 1.0000`
+  - `avg_net_ret = 0.2770`
+  - `median_net_ret = 0.2317`
+  - `min_net_ret = 0.0722`
+  - `max_net_ret = 0.6104`
+  - `avg_mfe_during_trade = 0.3872`
+  - `avg_mae_during_trade = -0.0486`
+- leave-one checks:
+  - leave-one-symbol target pass: `9 / 9`
+  - leave-one-month target pass: `3 / 3`
+  - leave-one-signal-day target pass: `8 / 8`
+- execution / liquidity diagnostics:
+  - max entry gap: `0.0047`
+  - entry gaps above configured `0.5%`: `0`
+  - entry gaps above `2%`: `0`
+  - signal closes within `1%` of same-day high: `5 / 12`
+  - minimum entry-day turnover proxy (`close * volume`): `529,363,695`
+  - median entry-day turnover proxy (`close * volume`): `6,938,466,838`
+  - max simulated cost as percent of entry-day turnover: `0.0037%`
+  - worst MAE during held trade: `-0.1602`
+
+### Interpretation
+
+- 這輪確認目前 direction 3 主候選不是靠單一 symbol、單一月份或單一 signal day 才過目標。
+- 進場 gap 風險也比原本想像低，因為保存的策略本來就有 `next_open gap <= 0.5%` 的硬過濾，實際成交樣本沒有違反。
+- 需要保留的風險是：
+  - 樣本仍只有 `12` 筆、`8` 個 signal day
+  - `5 / 12` 筆 signal day 收在當日高點附近，仍有追高型策略本身的 regime risk
+  - 這份 audit 只驗證目前保存的 walk-forward window，不能替代更新資料後的 forward replay
+- status:
+  - `Direction 3 robustness audit passed inside current saved replay window`
