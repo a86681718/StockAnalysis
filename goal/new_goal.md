@@ -83,12 +83,12 @@ Important constraints:
 - Report both successful and failed event families.
 
 The system must output:
-- output/features_stock_daily.parquet
-- output/rare_event_signals.parquet
-- output/trades.parquet
-- output/rare_event_leaderboard.csv
-- output/best_rare_event_report.md
-- output/rejected_rare_events.csv
+- outputs/analysis/rare_event/features_stock_daily.parquet
+- outputs/analysis/rare_event/rare_event_signals.parquet
+- outputs/analysis/rare_event/trades.parquet
+- outputs/analysis/rare_event/rare_event_leaderboard.csv
+- outputs/analysis/rare_event/best_rare_event_report.md
+- outputs/analysis/rare_event/rejected_rare_events.csv
 
 The best_rare_event_report.md must include:
 - event name,
