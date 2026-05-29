@@ -1373,3 +1373,65 @@ Direction 2:
 - Direction 2 已經有更新訊號，但因為策略使用 `40` 個交易日持有/觀察期，OHLC 只到 `2026-02-26` 時，`2025-12-23` 之後訊號都還不能算完整結果。
 - status:
   - `Forward replay blocked by trusted prediction coverage for direction 3 and horizon completion for direction 2`
+
+## Attempt 2026-05-29 / Direction 1 Branch Breakout Hybrid
+
+- scope:
+  - 從已失敗的 strict true branch-level standalone signal 出發，不重建分點特徵。
+  - 測試少量價格/量能 context，確認「特定分點異常買超」是否需要搭配股價站上前高才有交易價值。
+- tool:
+  - `apps/analysis/run_key_broker_branch_breakout_hybrid.py`
+- inputs:
+  - `outputs/analysis/key_broker_branch/best_key_broker_branch_signals.parquet`
+  - `data/_derived/ohlc.parquet`
+- outputs:
+  - `outputs/analysis/key_broker_branch_hybrid/key_broker_branch_hybrid_report.md`
+  - `outputs/analysis/key_broker_branch_hybrid/key_broker_branch_hybrid_summary.json`
+  - `outputs/analysis/key_broker_branch_hybrid/key_broker_branch_hybrid_leaderboard.csv`
+  - `outputs/analysis/key_broker_branch_hybrid/key_broker_branch_hybrid_trades.csv`
+  - `outputs/analysis/key_broker_branch_hybrid/key_broker_branch_hybrid_signals.parquet`
+
+### Results
+
+Baseline strict branch signal:
+
+- trades: `2,131`
+- win rate: `0.4139`
+- average net return: `0.0073`
+- median net return: `-0.0094`
+
+Focused hybrid scan:
+
+- scanned candidates: `1,728`
+- passing candidates: `8`
+- best rule:
+  - branch anomaly score in top `10%`
+  - signal-day close at or above prior 20-day high (`breakout_gap_20 >= 0`)
+  - `volume_ratio_5_20` between `0.5` and `2.0`
+  - `ret_5d <= 0.30`
+  - `hold_days = 20`
+  - no stop-loss
+- best metrics:
+  - trades: `24`
+  - win rate: `0.6667`
+  - average net return: `0.1111`
+  - median net return: `0.0325`
+  - profit factor: `5.1415`
+
+Robustness:
+
+- leave-one-symbol target pass: `22 / 23`
+- leave-one-month target pass: `1 / 4`
+- leave-one-broker target pass: `18 / 19`
+
+### Interpretation
+
+- 這輪把 direction 1 從「純分點異常 standalone 失敗」推進到「分點 + breakout context 有達標候選」。
+- 結構上符合使用者方向 1 的語意：
+  - 特定分點異常買超本身只是噪音來源
+  - 當異常分點買超同時出現在股價站回前 20 日高點、且量能沒有過熱時，才比較像推升行情
+- 但這不是 production-ready：
+  - 交易數只有 `24`
+  - leave-one-month 只有 `1 / 4` pass，代表月份/regime 依賴還很明顯
+- status:
+  - `Direction 1 has a target-clearing hybrid candidate; standalone branch trigger remains rejected`

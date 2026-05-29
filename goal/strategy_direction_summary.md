@@ -72,6 +72,30 @@ Direction 2 now also has a target-clearing rare-event candidate after the focuse
 
 This direction now clears the requested gates, but it has higher multiple-testing risk than the direction 3 candidate because the refinement scan evaluated `43,920` related specs. It is also sensitive to dropping `2025-09`, which pulls full average return below `10%`.
 
+Direction 1 now has a target-clearing hybrid candidate after adding price/volume context to the strict branch-level signal:
+
+- theme: key broker branch abnormal accumulation plus price reclaiming prior highs
+- script: `apps/analysis/run_key_broker_branch_breakout_hybrid.py`
+- report: `outputs/analysis/key_broker_branch_hybrid/key_broker_branch_hybrid_report.md`
+- leaderboard: `outputs/analysis/key_broker_branch_hybrid/key_broker_branch_hybrid_leaderboard.csv`
+- rule:
+  - start from strict branch standalone best signal artifact
+  - branch anomaly score in the top `10%` of that signal set
+  - signal-day close at or above prior 20-day high (`breakout_gap_20 >= 0`)
+  - 5-day / 20-day volume ratio between `0.5` and `2.0`
+  - 5-day return cap `<= 30%`
+  - `hold_days = 20`
+  - no stop-loss
+- trades: `24`
+- win rate: `0.6667`
+- mean net return: `0.1111`
+- median net return: `0.0325`
+- leave-one-symbol pass: `22 / 23`
+- leave-one-month pass: `1 / 4`
+- leave-one-broker pass: `18 / 19`
+
+This direction now has a target-clearing branch-driven candidate, but it is weaker than directions 2 and 3 because the sample is small and month robustness is poor. The important structural update is that branch abnormality needs price context; strict branch abnormality alone still fails.
+
 ## Direction 1: Key Broker Branch / Abnormal Broker Accumulation
 
 Closest current strategy family:
@@ -88,6 +112,10 @@ True branch-level scan:
 - script: `apps/analysis/run_key_broker_branch_scan.py`
 - artifact report: `outputs/analysis/key_broker_branch/key_broker_branch_report.md`
 - artifact leaderboard: `outputs/analysis/key_broker_branch/key_broker_branch_leaderboard.csv`
+- hybrid script: `apps/analysis/run_key_broker_branch_breakout_hybrid.py`
+- hybrid report: `outputs/analysis/key_broker_branch_hybrid/key_broker_branch_hybrid_report.md`
+- hybrid leaderboard: `outputs/analysis/key_broker_branch_hybrid/key_broker_branch_hybrid_leaderboard.csv`
+- hybrid trades: `outputs/analysis/key_broker_branch_hybrid/key_broker_branch_hybrid_trades.csv`
 - direction 3 overlay script: `apps/analysis/run_direction3_branch_overlay.py`
 - direction 3 overlay report: `outputs/analysis/direction3_branch_overlay/direction3_branch_overlay_report.md`
 - scope:
@@ -130,13 +158,34 @@ Best current standalone rare-event candidate in this family:
 - test win rate: `0.6447`
 - test mean net return: `0.1411`
 
+Branch breakout hybrid result:
+
+- scanned candidates: `1,728`
+- passing candidates: `8`
+- baseline strict branch trades: `2,131`
+- baseline strict branch win / avg: `0.4139` / `0.0073`
+- best hybrid rule:
+  - branch anomaly score quantile `>= 0.90`
+  - `breakout_gap_20 >= 0`
+  - `volume_ratio_5_20` between `0.5` and `2.0`
+  - `ret_5d <= 0.30`
+  - `hold_days=20`
+  - no stop-loss
+- best hybrid trades: `24`
+- best hybrid win / avg: `0.6667` / `0.1111`
+- leave-one-symbol target pass: `22 / 23`
+- leave-one-month target pass: `1 / 4`
+- leave-one-broker target pass: `18 / 19`
+
 Verdict:
 
 - This direction has signal value, especially as a filter for direction 3.
-- As a standalone strategy, both the aggregate rare-event version and the true branch-level scan are below the target.
+- As a pure standalone strategy, both the aggregate rare-event version and the true branch-level scan are below the target.
+- After adding price/volume breakout context, direction 1 now has a target-clearing hybrid candidate.
 - The branch-level result is especially important: naive "specific branch abnormal buying" alone is too noisy and does not beat the target.
 - The direction-3 overlay is also important: strict standalone branch signals should not be used as a hard gate for the current breakout candidate, because they would eliminate all selected trades.
 - Looser branch-level behavior is present in the selected breakout trades, but it is too broad to improve selection by itself.
+- The hybrid branch-breakout candidate is promising but not production-ready because leave-one-month robustness is weak.
 - The next useful research step is to keep branch-level features, but attach them to price/warrant context instead of using them as a standalone entry trigger:
   - branch-specific abnormal buy streaks before breakout
   - branch persistence by stock combined with low prior price reaction
@@ -265,7 +314,8 @@ Direction 2 boundary:
 
 1. Direction 3 plus direction 1 filter: primary candidate, target met.
 2. Direction 2: target-clearing rare-event candidate after refinement, larger sample than direction 3 but higher multiple-testing and month-sensitivity risk.
-3. Direction 1 standalone: useful signal family, but current true branch-level standalone scan fails both win-rate and return targets.
+3. Direction 1 branch-breakout hybrid: target-clearing, but weaker due to small sample and poor leave-one-month robustness.
+4. Direction 1 pure standalone: useful signal family, but current true branch-level standalone scan fails both win-rate and return targets.
 
 ## Next Research Step
 
@@ -274,6 +324,7 @@ The next high-value step is not another broad grid search. It is to harden the t
 - extend the same replay to newer OOF data when available
 - for direction 3, regenerate trusted OOF / walk-forward breakout predictions after `2026-02-03`, then replay the same fixed thresholds
 - for direction 2, wait for enough OHLC to complete the `2025-12-23` to `2026-02-23` pending signals, then score them without changing thresholds
+- for direction 1, treat the branch-breakout hybrid as the next validation target and specifically test month/regime robustness before using it as a production rule
 - inspect direction 3 trades manually for qualitative market context; quantitative liquidity/gap checks are now saved
 - derive lighter branch-level context features for the direction 3 model/day filter, because strict standalone branch gating failed the overlay check
 - add a stricter out-of-sample or forward replay for `warrant_leads_stock_refine`, because the current direction-2 result came from a broad parameter scan
