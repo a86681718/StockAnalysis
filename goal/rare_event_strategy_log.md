@@ -600,3 +600,120 @@
 - 「正股先累積、準備 breakout」
 
 更像這輪 corrected research 真正找到的 rare-event 主方向。
+
+## 2026-05-29 Direction 2 Refinement Scan
+
+這輪把 `warrant_leads_stock` 從主 pipeline 的 coarse grid 中拉出來，做一個只針對方向 2 的 refinement：
+
+- script: `apps/analysis/run_warrant_leads_stock_refine.py`
+- report: `outputs/analysis/rare_event/warrant_leads_stock_refine_report.md`
+- leaderboard: `outputs/analysis/rare_event/warrant_leads_stock_refine_leaderboard.csv`
+- trades: `outputs/analysis/rare_event/warrant_leads_stock_refine_trades.parquet`
+- signals: `outputs/analysis/rare_event/warrant_leads_stock_refine_signals.parquet`
+- concentration: `outputs/analysis/rare_event/warrant_leads_stock_refine_concentration.csv`
+- leave-one-symbol: `outputs/analysis/rare_event/warrant_leads_stock_refine_leave_one_symbol_out.csv`
+- leave-one-month: `outputs/analysis/rare_event/warrant_leads_stock_refine_leave_one_month_out.csv`
+
+### Scan Design
+
+這次沒有重建 feature，而是直接使用 corrected feature artifact：
+
+- `outputs/analysis/rare_event/features_stock_daily.parquet`
+
+base 條件仍然維持方向 2 的事件語意：
+
+- 權證端買盤強：
+  - `warrant_posnet_pct_cs >= 0.98 / 0.99`
+  - `warrant_posnet_strong_days_20 >= 1 / 3 / 5`
+- 正股端不能太弱，但也避免完全擁擠：
+  - `stock_posnet_pct_cs` 區間在 `0.70~0.95` 的幾組組合
+- 價格先前反應不能太大：
+  - `prior_abs_ret_20d <= 0.08 / 0.12`
+- 出場：
+  - `hold_days = 30 / 40`
+  - `cooldown_days = 15 / 20`
+  - `stop_loss = None / -12% / -10%`
+
+refinement 主要加了幾類二階條件：
+
+- 權證集中度：
+  - `warrant_hhi_pct_cs`
+  - `warrant_hhi_posnet_20`
+  - `warrant_top_posnet_ratio_20`
+  - `warrant_dyn_k_pct_cs`
+- 價格未過熱：
+  - `volume_ratio_5_20`
+  - `breakout_gap_20`
+  - `price_pos_20`
+
+總共有效掃描：
+
+- `43,920` specs
+- `1,607` rare-event all-pass rows
+- `3,067` full target-pass rows
+- `1,030` robust target-pass rows
+
+### Best Refined Candidate
+
+最佳候選切到一個更嚴格的權證動態集中條件：
+
+- event:
+  - `warrant_leads_stock__h40__cd15__filter_suite-warrant_dyn_k__prior_abs_ret_20d-0p08__stock_posnet_cap-0p95__stock_posnet_floor-0p8__stop_loss--0p1__warrant_dyn_k_pct_cs_floor-0p9__warrant_posnet_floor-0p98__warrant_posnet_strong_days_20-3`
+- key params:
+  - `warrant_posnet_pct_cs >= 0.98`
+  - `warrant_dyn_k_pct_cs >= 0.90`
+  - `warrant_posnet_strong_days_20 >= 3`
+  - `stock_posnet_pct_cs` between `0.80` and `0.95`
+  - `prior_abs_ret_20d <= 0.08`
+  - `hold_days = 40`
+  - `cooldown_days = 15`
+  - `stop_loss = -10%`
+
+結果：
+
+- `full_trades = 52`
+- `full_win_rate = 0.6154`
+- `full_avg_net_ret = 0.1143`
+- `full_median_net_ret = 0.0873`
+- `full_profit_factor = 4.2203`
+- `full_max_loss = -10.43%`
+- `test_trades = 12`
+- `test_win_rate = 0.7500`
+- `test_avg_net_ret = 0.1342`
+
+這是目前方向 2 第一個同時達到使用者目標的版本：
+
+- 勝率大於 `50%`
+- 平均報酬大於 `10%`
+
+### Robustness Notes
+
+leave-one-symbol 結果：
+
+- `27 / 28` 個 symbol 被移除後仍維持 robust target pass
+- 唯一敏感 symbol 是 `3443`
+  - 移除後 `full_avg_net_ret = 0.0994`
+  - 主要問題是剛好跌破 `10%` 門檻
+
+leave-one-month 結果：
+
+- `6 / 8` 個月份被移除後仍維持 robust target pass
+- 敏感月份：
+  - 移除 `2025-09` 後 `full_avg_net_ret = 0.0986`
+  - 移除 `2025-11` 後 `test_trades = 4`
+
+### Interpretation
+
+這輪把方向 2 從「接近目標」推進到「目前證據下已達標」：
+
+- 原 baseline 的問題是平均報酬只有約 `9.13%`
+- 加上 `warrant_dyn_k_pct_cs >= 0.90` 後，報酬與 test 表現都明顯改善
+- 這更貼近「權證老司機」的語意：
+  - 不是只有權證總買盤強
+  - 而是權證端買盤具有更高的動態集中/主導性
+
+但這不是 production-ready 結論：
+
+- 這輪是 `43,920` specs 的 refinement，multiple-testing risk 明顯高於主 pipeline coarse scan
+- 月份敏感性仍存在
+- 下一步應該做更嚴格的 forward / out-of-sample replay，而不是繼續放大 grid

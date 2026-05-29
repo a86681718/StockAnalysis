@@ -6,7 +6,7 @@ This note maps the three requested trading directions to the current evidence in
 
 ## Current Answer
 
-The strongest validated strategy so far is direction 3, with direction 1 used as a chip-quality filter:
+The strongest high-return strategy so far is direction 3, with direction 1 used as a chip-quality filter:
 
 - theme: breakout-chase / early surge continuation
 - universe: `repair branch + top_posnet_ratio <= 0.610`
@@ -30,12 +30,39 @@ Verified result on the current walk-forward validation window:
 - total net return: `0.6625`
 - rolling windows: `6 / 6` windows have positive strict pass behavior in the saved rolling check
 
-This is the only current candidate that clearly exceeds both target gates:
+This candidate clearly exceeds both target gates:
 
 - win rate greater than `50%`
 - average return greater than `10%`
 
 It is still sparse, so it should be treated as the strongest validated candidate in the current data, not as a finished production strategy.
+
+Direction 2 now also has a target-clearing rare-event candidate after the focused warrant refinement scan:
+
+- theme: warrant concentrated/dynamic buying leads the underlying stock
+- script: `apps/analysis/run_warrant_leads_stock_refine.py`
+- report: `outputs/analysis/rare_event/warrant_leads_stock_refine_report.md`
+- leaderboard: `outputs/analysis/rare_event/warrant_leads_stock_refine_leaderboard.csv`
+- rule:
+  - `warrant_posnet_pct_cs >= 0.98`
+  - `warrant_dyn_k_pct_cs >= 0.90`
+  - `warrant_posnet_strong_days_20 >= 3`
+  - `stock_posnet_pct_cs` between `0.80` and `0.95`
+  - `prior_abs_ret_20d <= 0.08`
+  - `hold_days = 40`
+  - `cooldown_days = 15`
+  - `stop_loss = -10%`
+- full trades: `52`
+- full win rate: `0.6154`
+- full mean net return: `0.1143`
+- full median net return: `0.0873`
+- test trades: `12`
+- test win rate: `0.7500`
+- test mean net return: `0.1342`
+- leave-one-symbol robust pass: `27 / 28`
+- leave-one-month robust pass: `6 / 8`
+
+This direction now clears the requested gates, but it has higher multiple-testing risk than the direction 3 candidate because the refinement scan evaluated `43,920` related specs. It is also sensitive to dropping `2025-09`, which pulls full average return below `10%`.
 
 ## Direction 1: Key Broker Branch / Abnormal Broker Accumulation
 
@@ -100,29 +127,40 @@ Verdict:
 Closest current strategy family:
 
 - `warrant_leads_stock`
-- source artifact: `outputs/analysis/rare_event/best_rare_event_report.md`
+- source artifacts:
+  - `outputs/analysis/rare_event/best_rare_event_report.md`
+  - `outputs/analysis/rare_event/warrant_leads_stock_refine_report.md`
 
-Current best rare-event strategy:
+Current best refined rare-event strategy:
 
-- event name: `warrant_leads_stock__h40__cd15__prior_abs_ret_20d-0p08__stock_posnet_cap-0p9__stock_posnet_floor-0p7__stop_loss--0p1__warrant_posnet_floor-0p98__warrant_posnet_strong_days_20-3`
+- event name: `warrant_leads_stock__h40__cd15__filter_suite-warrant_dyn_k__prior_abs_ret_20d-0p08__stock_posnet_cap-0p95__stock_posnet_floor-0p8__stop_loss--0p1__warrant_dyn_k_pct_cs_floor-0p9__warrant_posnet_floor-0p98__warrant_posnet_strong_days_20-3`
 - rule summary:
   - warrant positive-net percentile at least `0.98`
-  - stock positive-net percentile between `0.70` and `0.90`
+  - warrant dynamic concentration percentile at least `0.90`
+  - stock positive-net percentile between `0.80` and `0.95`
   - prior 20-day absolute return at most `8%`
   - stop loss `-10%`
   - hold up to `40` trading days
-- full trades: `81`
-- full win rate: `0.5062`
-- full mean net return: `0.0913`
-- full MFE 40d: `0.2395`
-- test trades: `14`
-- test mean net return: `0.0321`
+- scan size: `43,920` specs
+- robust target-pass specs: `1,030`
+- full trades: `52`
+- full win rate: `0.6154`
+- full mean net return: `0.1143`
+- full median net return: `0.0873`
+- full profit factor: `4.2203`
+- full max loss: `-0.1043`
+- test trades: `12`
+- test win rate: `0.7500`
+- test mean net return: `0.1342`
+- leave-one-symbol robust pass: `27 / 28`
+- leave-one-month robust pass: `6 / 8`
 
 Verdict:
 
-- This direction is valid as an asymmetric rare-event setup.
-- It barely clears the `50%` win-rate target, but the full-window average net return is still below `10%`.
-- It should stay as a secondary candidate and as a confirmation layer for breakout or broker-flow strategies.
+- This direction now clears both requested target gates in the current evidence.
+- It is a stronger standalone candidate than the previous direction-2 baseline.
+- Main caveat: it came from a broad refinement scan, and leave-one-month shows sensitivity to `2025-09` and the current test-window sample size.
+- It should be treated as a target-clearing rare-event candidate that still needs out-of-sample hardening.
 
 ## Direction 3: Breakout / Hot Surge Chase
 
@@ -164,14 +202,15 @@ Verdict:
 ## Ranking
 
 1. Direction 3 plus direction 1 filter: primary candidate, target met.
-2. Direction 2: good rare-event candidate, target almost met, useful confirmation layer.
+2. Direction 2: target-clearing rare-event candidate after refinement, larger sample than direction 3 but higher multiple-testing and month-sensitivity risk.
 3. Direction 1 standalone: useful signal family, but current true branch-level standalone scan fails both win-rate and return targets.
 
 ## Next Research Step
 
-The next high-value step is not another broad grid search. It is to harden the primary candidate:
+The next high-value step is not another broad grid search. It is to harden the two target-clearing candidates:
 
 - extend the same replay to newer OOF data when available
 - add leave-one-symbol-out and leave-one-month-out checks for `repair_branch_topratio0610_daybuy20ge4`
 - inspect the 12 trades manually for liquidity, limit-up execution risk, and repeated-symbol concentration
 - merge the new key-broker branch features into the direction 3 breakout candidate as an additional quality/context layer
+- add a stricter out-of-sample or forward replay for `warrant_leads_stock_refine`, because the current direction-2 result came from a broad parameter scan
