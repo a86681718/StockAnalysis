@@ -1251,3 +1251,82 @@
   - 這份 audit 只驗證目前保存的 walk-forward window，不能替代更新資料後的 forward replay
 - status:
   - `Direction 3 robustness audit passed inside current saved replay window`
+
+## Attempt 2026-05-29 / Direction 3 True Branch Overlay
+
+- scope:
+  - 把 true branch-level 分點訊號接回目前 direction 3 主策略，確認方向 1 是否能變成硬進場 gate。
+  - 這輪不搜尋新策略參數，只做 overlay / diagnostic。
+- tool:
+  - `apps/analysis/run_direction3_branch_overlay.py`
+- inputs:
+  - direction 3 candidates:
+    - `data/_derived/ml_runs/breakout10_predictions_wf_repair_branch_topratio0610_daybuy20ge4.csv`
+  - direction 3 trades:
+    - `data/_derived/ml_runs/repair_branch_topratio0610_daybuy20ge4_trades.csv`
+  - strict branch signal:
+    - `outputs/analysis/key_broker_branch/best_key_broker_branch_signals.parquet`
+  - raw branch source:
+    - `data/bs_report/parquet_twse`
+    - `data/bs_report/parquet_tpex`
+- outputs:
+  - `outputs/analysis/direction3_branch_overlay/direction3_branch_overlay_report.md`
+  - `outputs/analysis/direction3_branch_overlay/direction3_branch_overlay_candidates.csv`
+  - `outputs/analysis/direction3_branch_overlay/direction3_branch_overlay_trades.csv`
+  - `outputs/analysis/direction3_branch_overlay/direction3_branch_overlay_signal_days.csv`
+  - `outputs/analysis/direction3_branch_overlay/direction3_branch_overlay_threshold_summary.csv`
+
+### Results
+
+strict standalone branch signal coverage:
+
+- selected direction 3 trades:
+  - `0 / 12`
+- direction 3 day candidates:
+  - `1 / 690`
+
+looser true branch feature coverage:
+
+- selected direction 3 trades:
+  - `12 / 12`
+- direction 3 day candidates:
+  - `690 / 690`
+- loose strong-branch exact coverage on selected trades:
+  - `5 / 12`
+- loose strong-branch exact coverage on day candidates:
+  - `206 / 690`
+
+candidate label diagnostics:
+
+- all candidates with loose branch exact match:
+  - `690` rows
+  - label hit `0.3971`
+- loose strong branch:
+  - `206` rows
+  - label hit `0.3786`
+- strict standalone exact match:
+  - `1` row
+  - label hit `1.0000`, but sample is too small to use
+- strict-like exact match from loose features:
+  - `2` rows
+  - label hit `1.0000`, also too sparse
+
+### Interpretation
+
+這輪把 direction 1 接回 direction 3 的定位說清楚了：
+
+- 嚴格 standalone 分點條件不能直接當 direction 3 的硬 gate
+  - 因為它會把目前 `12` 筆主策略交易全部濾掉
+- 較寬的 true branch 行為在所有 direction 3 交易上都存在
+  - 但它也覆蓋所有 day candidates，所以不能單獨提高篩選力
+- `loose strong branch` 覆蓋 `206 / 690` 個 candidates，但 label hit 沒有優於全集
+  - `0.3786` vs all candidates `0.3971`
+
+因此目前比較合理的架構仍是：
+
+- direction 3 breakout / day-quality 是主進場邏輯
+- direction 1 分點行為作為 context feature 或模型特徵
+- 不要用 strict branch standalone scanner 直接 gate direction 3
+
+- status:
+  - `True branch overlay supports context-feature use, not hard gating`

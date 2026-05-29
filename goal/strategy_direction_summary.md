@@ -87,6 +87,8 @@ True branch-level scan:
 - script: `apps/analysis/run_key_broker_branch_scan.py`
 - artifact report: `outputs/analysis/key_broker_branch/key_broker_branch_report.md`
 - artifact leaderboard: `outputs/analysis/key_broker_branch/key_broker_branch_leaderboard.csv`
+- direction 3 overlay script: `apps/analysis/run_direction3_branch_overlay.py`
+- direction 3 overlay report: `outputs/analysis/direction3_branch_overlay/direction3_branch_overlay_report.md`
 - scope:
   - all current 4-digit non-ETF stock parquet files with OHLC coverage
   - signal window `2025-10-01` to `2026-02-03`
@@ -108,6 +110,15 @@ True branch-level scan:
   - mean net return: `0.0073`
   - median net return: `-0.0094`
 
+Direction 3 overlay result:
+
+- strict standalone branch exact coverage on selected direction-3 trades: `0 / 12`
+- strict standalone branch exact coverage on direction-3 day candidates: `1 / 690`
+- looser true-branch exact coverage on selected direction-3 trades: `12 / 12`
+- looser strong-branch exact coverage on selected direction-3 trades: `5 / 12`
+- looser strong-branch exact coverage on direction-3 day candidates: `206 / 690`
+- candidate label hit under looser strong branch: `0.3786`, versus `0.3971` for all day candidates
+
 Best current standalone rare-event candidate in this family:
 
 - event name: `accumulation_pre_breakout__h30__cd15__breakout_gap_20_cap-0p02__stock_posnet_pct_cs-0p98__stock_posnet_strong_days_20-3__stop_loss--0p1__volume_ratio_5_20_cap-1p8__warrant_posnet_floor-0p5`
@@ -123,6 +134,8 @@ Verdict:
 - This direction has signal value, especially as a filter for direction 3.
 - As a standalone strategy, both the aggregate rare-event version and the true branch-level scan are below the target.
 - The branch-level result is especially important: naive "specific branch abnormal buying" alone is too noisy and does not beat the target.
+- The direction-3 overlay is also important: strict standalone branch signals should not be used as a hard gate for the current breakout candidate, because they would eliminate all selected trades.
+- Looser branch-level behavior is present in the selected breakout trades, but it is too broad to improve selection by itself.
 - The next useful research step is to keep branch-level features, but attach them to price/warrant context instead of using them as a standalone entry trigger:
   - branch-specific abnormal buy streaks before breakout
   - branch persistence by stock combined with low prior price reaction
@@ -179,6 +192,7 @@ Closest current strategy:
   - `data/_derived/ml_runs/repair_branch_topratio0610_daybuy20ge4_trades.csv`
   - `data/_derived/ml_runs/repair_branch_topratio0610_daybuy20ge4_rolling_windows.csv`
   - `outputs/analysis/direction3_breakout_robustness/direction3_breakout_robustness_report.md`
+  - `outputs/analysis/direction3_branch_overlay/direction3_branch_overlay_report.md`
 
 Current best rule:
 
@@ -205,12 +219,15 @@ Verified result:
 - leave-one-signal-day target pass: `8 / 8`
 - worst single-trade MAE while held: `-0.1602`
 - entry gap violations above `0.5%`: `0`
+- strict branch standalone exact coverage: `0 / 12`
+- looser true-branch exact coverage: `12 / 12`
 
 Verdict:
 
 - This is the current primary strategy candidate.
 - It satisfies the target gates in the current saved walk-forward evidence.
 - New robustness checks show it is not dependent on one symbol, month, or signal day inside the saved replay.
+- True branch-level overlay supports keeping branch behavior as a context feature, not as a hard gate.
 - Main weakness is still sample size and the need for newer out-of-sample replay data, not current return quality.
 
 ## Ranking
@@ -225,5 +242,5 @@ The next high-value step is not another broad grid search. It is to harden the t
 
 - extend the same replay to newer OOF data when available
 - inspect direction 3 trades manually for qualitative market context; quantitative liquidity/gap checks are now saved
-- merge the new key-broker branch features into the direction 3 breakout candidate as an additional quality/context layer
+- derive lighter branch-level context features for the direction 3 model/day filter, because strict standalone branch gating failed the overlay check
 - add a stricter out-of-sample or forward replay for `warrant_leads_stock_refine`, because the current direction-2 result came from a broad parameter scan
