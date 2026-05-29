@@ -1,6 +1,6 @@
 # Strategy Direction Summary
 
-Updated: 2026-05-29
+Updated: 2026-05-30
 
 This note maps the three requested trading directions to the current evidence in this repo.
 
@@ -20,6 +20,7 @@ The strongest high-return strategy so far is direction 3, with direction 1 used 
 - artifact rolling windows: `data/_derived/ml_runs/repair_branch_topratio0610_daybuy20ge4_rolling_windows.csv`
 - robustness report: `outputs/analysis/direction3_breakout_robustness/direction3_breakout_robustness_report.md`
 - forward-readiness report: `outputs/analysis/strategy_forward_readiness/strategy_forward_readiness_report.md`
+- completion audit: `goal/strategy_completion_audit.md`
 
 Verified result on the current walk-forward validation window:
 
@@ -321,7 +322,7 @@ Direction 2 boundary:
 
 ## Next Research Step
 
-The next high-value step is not another broad grid search. It is to harden the two target-clearing candidates:
+The explicit user goal is now complete at the research-candidate level. The next high-value step is not another broad grid search; it is production hardening of the three target-clearing candidates:
 
 - extend the same replay to newer OOF data when available
 - for direction 3, regenerate trusted OOF / walk-forward breakout predictions after `2026-02-03`, then replay the same fixed thresholds
