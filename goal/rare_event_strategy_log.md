@@ -613,6 +613,7 @@
 - concentration: `outputs/analysis/rare_event/warrant_leads_stock_refine_concentration.csv`
 - leave-one-symbol: `outputs/analysis/rare_event/warrant_leads_stock_refine_leave_one_symbol_out.csv`
 - leave-one-month: `outputs/analysis/rare_event/warrant_leads_stock_refine_leave_one_month_out.csv`
+- case explorer: `outputs/analysis/rare_event/warrant_leads_stock_case_explorer.html`
 
 ### Scan Design
 
