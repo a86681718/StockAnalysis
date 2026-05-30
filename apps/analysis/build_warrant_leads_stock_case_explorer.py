@@ -726,7 +726,7 @@ def _render_html(payload: dict[str, object]) -> str:
         detail('權證淨買百分位', fmtPct(entry.warrantPosnetPct)),
         detail('權證動態家數百分位', fmtPct(entry.warrantDynKPct)),
         detail('權證強勢天數 20D', entry.warrantStrongDays20),
-        detail('權證正淨買(百萬)', fmtNum(entry.warrantPosnetTotalM)),
+        detail('權證正淨買量(百萬)', fmtNum(entry.warrantPosnetTotalM)),
         detail('現股淨買百分位', fmtPct(entry.stockPosnetPct)),
         detail('20D 前波振幅', fmtPct(entry.priorAbsRet20d)),
       ].join('');
@@ -738,7 +738,7 @@ def _render_html(payload: dict[str, object]) -> str:
         `<strong>${winLoss}</strong>\n` +
         `訊號在 ${entry.signalDate} 出現，隔日以 ${fmtNum(entry.entryPxRaw)} 進場，${entry.exitDate} 以 ${fmtNum(entry.exitPxRaw)} 出場。\n` +
         `這筆的最大有利移動 MFE 40D 是 ${fmtPct(entry.mfe40)}，20D 內最大不利移動 MAE 是 ${fmtPct(entry.mae20)}。\n` +
-        `第三段圖的柱狀是每日權證正淨買金額，兩條線是權證淨買百分位與動態家數百分位。\n` +
+        `第三段圖的柱狀是每日權證正淨買量，兩條線是權證淨買百分位與動態家數百分位。\n` +
         `判讀重點是：權證端分點集中度已經非常極端，但現股端仍在中高段，代表槓桿資金可能比現股分點更早或更集中。`;
 
       const rule = payload.rule;
@@ -767,7 +767,7 @@ def _render_html(payload: dict[str, object]) -> str:
         },
         legend: {
           top: 8,
-          data: ['K線', '成交量', '權證正淨買(百萬)', '權證淨買百分位', '權證動態家數百分位', '收盤相對進場報酬'],
+          data: ['K線', '成交量', '權證正淨買量(百萬)', '權證淨買百分位', '權證動態家數百分位', '收盤相對進場報酬'],
         },
         grid: [
           { left: 64, right: 58, top: 54, height: 330 },
@@ -840,7 +840,7 @@ def _render_html(payload: dict[str, object]) -> str:
             },
           },
           {
-            name: '權證正淨買(百萬)',
+            name: '權證正淨買量(百萬)',
             type: 'bar',
             xAxisIndex: 2,
             yAxisIndex: 2,
