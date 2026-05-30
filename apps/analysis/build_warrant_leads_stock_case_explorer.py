@@ -19,29 +19,41 @@ RARE_EVENT_DIR = resolve_output("analysis", "rare_event")
 TRADES_PATH = RARE_EVENT_DIR / "warrant_leads_stock_refine_trades.parquet"
 SIGNALS_PATH = RARE_EVENT_DIR / "warrant_leads_stock_refine_signals.parquet"
 REPORT_PATH = RARE_EVENT_DIR / "warrant_leads_stock_refine_report.md"
-OHLC_PATH = PROJECT_ROOT / "data" / "_derived" / "ohlc.parquet"
+FEATURES_PATH = RARE_EVENT_DIR / "features_stock_daily.parquet"
 OUTPUT_HTML = RARE_EVENT_DIR / "warrant_leads_stock_case_explorer.html"
 
 
 def _load_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     trades = pd.read_parquet(TRADES_PATH).copy()
     signals = pd.read_parquet(SIGNALS_PATH).copy()
-    ohlc = pd.read_parquet(
-        OHLC_PATH,
-        columns=["symbol", "date", "open", "high", "low", "close", "volume"],
+    features = pd.read_parquet(
+        FEATURES_PATH,
+        columns=[
+            "symbol",
+            "date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "warrant_net_total",
+            "warrant_posnet_total",
+            "warrant_posnet_pct_cs",
+            "warrant_dyn_k_pct_cs",
+        ],
     ).copy()
 
-    for df in (trades, signals, ohlc):
+    for df in (trades, signals, features):
         df["symbol"] = df["symbol"].astype(str)
         df["date"] = pd.to_datetime(df["date"])
 
     for col in ("signal_date", "entry_date", "exit_date"):
         trades[col] = pd.to_datetime(trades[col])
 
-    ohlc = ohlc[ohlc["symbol"].str.len() == 4].sort_values(["symbol", "date"]).reset_index(drop=True)
+    features = features[features["symbol"].str.len() == 4].sort_values(["symbol", "date"]).reset_index(drop=True)
     trades = trades.sort_values(["signal_date", "symbol"]).reset_index(drop=True)
     signals = signals.sort_values(["date", "symbol"]).reset_index(drop=True)
-    return trades, signals, ohlc
+    return trades, signals, features
 
 
 def _safe_float(value: object, digits: int = 4) -> float | None:
@@ -54,6 +66,12 @@ def _safe_int(value: object) -> int | None:
     if pd.isna(value):
         return None
     return int(value)
+
+
+def _safe_millions(value: object) -> float | None:
+    if pd.isna(value):
+        return None
+    return round(float(value) / 1_000_000, 2)
 
 
 def _summary(trades: pd.DataFrame, signals: pd.DataFrame) -> dict[str, object]:
@@ -109,8 +127,8 @@ def _bucket_for(row: pd.Series, top_keys: set[tuple[str, str]], worst_keys: set[
     return "negative"
 
 
-def _extract_window(ohlc: pd.DataFrame, trade: pd.Series, pre_bars: int = 30, post_bars: int = 12) -> dict[str, object]:
-    sub = ohlc.loc[ohlc["symbol"] == trade["symbol"]].reset_index(drop=True)
+def _extract_window(features: pd.DataFrame, trade: pd.Series, pre_bars: int = 30, post_bars: int = 12) -> dict[str, object]:
+    sub = features.loc[features["symbol"] == trade["symbol"]].reset_index(drop=True)
     signal_idx = sub.index[sub["date"] == trade["signal_date"]]
     entry_idx = sub.index[sub["date"] == trade["entry_date"]]
     exit_idx = sub.index[sub["date"] == trade["exit_date"]]
@@ -130,6 +148,10 @@ def _extract_window(ohlc: pd.DataFrame, trade: pd.Series, pre_bars: int = 30, po
     candles: list[list[float]] = []
     volumes: list[int] = []
     ret_path: list[float | None] = []
+    warrant_posnet_m: list[float | None] = []
+    warrant_net_m: list[float | None] = []
+    warrant_posnet_pct_path: list[float | None] = []
+    warrant_dyn_k_pct_path: list[float | None] = []
 
     for _, row in window.iterrows():
         candles.append(
@@ -143,12 +165,20 @@ def _extract_window(ohlc: pd.DataFrame, trade: pd.Series, pre_bars: int = 30, po
         volumes.append(int(row["volume"]) if pd.notna(row["volume"]) else 0)
         close_px = float(row["close"])
         ret_path.append(round(close_px / entry_px_raw - 1.0, 4) if entry_px_raw > 0 else None)
+        warrant_posnet_m.append(_safe_millions(row["warrant_posnet_total"]))
+        warrant_net_m.append(_safe_millions(row["warrant_net_total"]))
+        warrant_posnet_pct_path.append(_safe_float(row["warrant_posnet_pct_cs"]))
+        warrant_dyn_k_pct_path.append(_safe_float(row["warrant_dyn_k_pct_cs"]))
 
     return {
         "dates": dates,
         "candles": candles,
         "volumes": volumes,
         "retPath": ret_path,
+        "warrantPosnetM": warrant_posnet_m,
+        "warrantNetM": warrant_net_m,
+        "warrantPosnetPctPath": warrant_posnet_pct_path,
+        "warrantDynKPctPath": warrant_dyn_k_pct_path,
         "signalPos": dates.index(trade["signal_date"].strftime("%Y-%m-%d")),
         "entryPos": dates.index(trade["entry_date"].strftime("%Y-%m-%d")),
         "exitPos": dates.index(trade["exit_date"].strftime("%Y-%m-%d")),
@@ -156,12 +186,12 @@ def _extract_window(ohlc: pd.DataFrame, trade: pd.Series, pre_bars: int = 30, po
     }
 
 
-def _trade_item(ohlc: pd.DataFrame, row: pd.Series, idx: int, bucket: str) -> dict[str, object]:
+def _trade_item(features: pd.DataFrame, row: pd.Series, idx: int, bucket: str) -> dict[str, object]:
     signal_date = row["signal_date"].strftime("%Y-%m-%d")
     entry_date = row["entry_date"].strftime("%Y-%m-%d")
     exit_date = row["exit_date"].strftime("%Y-%m-%d")
     net_ret = float(row["net_ret"])
-    window = _extract_window(ohlc, row)
+    window = _extract_window(features, row)
 
     return {
         "id": idx,
@@ -191,13 +221,15 @@ def _trade_item(ohlc: pd.DataFrame, row: pd.Series, idx: int, bucket: str) -> di
         "warrantPosnetPct": _safe_float(row["warrant_posnet_pct_cs"]),
         "warrantDynKPct": _safe_float(row["warrant_dyn_k_pct_cs"]),
         "warrantStrongDays20": _safe_int(row["warrant_posnet_strong_days_20"]),
+        "warrantPosnetTotalM": _safe_millions(row["warrant_posnet_total"]),
+        "warrantNetTotalM": _safe_millions(row["warrant_net_total"]),
         "stockWarrantPosnetGap": _safe_float(row["stock_warrant_posnet_gap"]),
         "stockWarrantDynKGap": _safe_float(row["stock_warrant_dynk_gap"]),
         **window,
     }
 
 
-def _build_payload(trades: pd.DataFrame, signals: pd.DataFrame, ohlc: pd.DataFrame) -> dict[str, object]:
+def _build_payload(trades: pd.DataFrame, signals: pd.DataFrame, features: pd.DataFrame) -> dict[str, object]:
     top_keys = {
         (str(row["symbol"]), row["signal_date"].strftime("%Y-%m-%d"))
         for _, row in trades.sort_values("net_ret", ascending=False).head(5).iterrows()
@@ -211,7 +243,7 @@ def _build_payload(trades: pd.DataFrame, signals: pd.DataFrame, ohlc: pd.DataFra
     ranked = trades.sort_values(["signal_date", "symbol"]).reset_index(drop=True)
     for idx, row in ranked.iterrows():
         bucket = _bucket_for(row, top_keys, worst_keys)
-        entries.append(_trade_item(ohlc, row, idx, bucket))
+        entries.append(_trade_item(features, row, idx, bucket))
 
     return {
         "summary": _summary(trades, signals),
@@ -452,7 +484,7 @@ def _render_html(payload: dict[str, object]) -> str:
     }
     .chart {
       width: 100%;
-      height: 680px;
+      height: 780px;
       border: 1px solid var(--line);
       border-radius: 8px;
     }
@@ -511,7 +543,7 @@ def _render_html(payload: dict[str, object]) -> str:
         border-right: 0;
       }
       .chart {
-        height: 520px;
+        height: 640px;
       }
       .chip {
         white-space: normal;
@@ -524,10 +556,10 @@ def _render_html(payload: dict[str, object]) -> str:
     <section class="header">
       <div class="panel intro">
         <h1>Warrant Leads Stock Case Explorer</h1>
-        <p class="lede">方向二的實際案例檢視。這頁只使用已完成出場的真實交易，左側可切換全部 52 筆、前五大獲利、前五大虧損、停損或獲利案例；右側顯示訊號日條件、進出場、停損線、持有區間與可縮放 K 線。</p>
+        <p class="lede">方向二的實際案例檢視。這頁只使用已完成出場的真實交易，左側可切換全部 52 筆、前五大獲利、前五大虧損、停損或獲利案例；右側顯示訊號日條件、進出場、停損線、持有區間、可縮放 K 線與逐日權證買盤。</p>
         <div class="chips">
           <span class="chip">資料: outputs/analysis/rare_event/warrant_leads_stock_refine_trades.parquet</span>
-          <span class="chip">價格: data/_derived/ohlc.parquet</span>
+          <span class="chip">走勢與權證買盤: outputs/analysis/rare_event/features_stock_daily.parquet</span>
           <span class="chip">視窗: 訊號前 30 根到出場後 12 根</span>
         </div>
       </div>
@@ -694,9 +726,9 @@ def _render_html(payload: dict[str, object]) -> str:
         detail('權證淨買百分位', fmtPct(entry.warrantPosnetPct)),
         detail('權證動態家數百分位', fmtPct(entry.warrantDynKPct)),
         detail('權證強勢天數 20D', entry.warrantStrongDays20),
+        detail('權證正淨買(百萬)', fmtNum(entry.warrantPosnetTotalM)),
         detail('現股淨買百分位', fmtPct(entry.stockPosnetPct)),
         detail('20D 前波振幅', fmtPct(entry.priorAbsRet20d)),
-        detail('5/20 量比', fmtNum(entry.volumeRatio520)),
       ].join('');
     }
 
@@ -706,6 +738,7 @@ def _render_html(payload: dict[str, object]) -> str:
         `<strong>${winLoss}</strong>\n` +
         `訊號在 ${entry.signalDate} 出現，隔日以 ${fmtNum(entry.entryPxRaw)} 進場，${entry.exitDate} 以 ${fmtNum(entry.exitPxRaw)} 出場。\n` +
         `這筆的最大有利移動 MFE 40D 是 ${fmtPct(entry.mfe40)}，20D 內最大不利移動 MAE 是 ${fmtPct(entry.mae20)}。\n` +
+        `第三段圖的柱狀是每日權證正淨買金額，兩條線是權證淨買百分位與動態家數百分位。\n` +
         `判讀重點是：權證端分點集中度已經非常極端，但現股端仍在中高段，代表槓桿資金可能比現股分點更早或更集中。`;
 
       const rule = payload.rule;
@@ -734,26 +767,30 @@ def _render_html(payload: dict[str, object]) -> str:
         },
         legend: {
           top: 8,
-          data: ['K線', '成交量', '收盤相對進場報酬'],
+          data: ['K線', '成交量', '權證正淨買(百萬)', '權證淨買百分位', '權證動態家數百分位', '收盤相對進場報酬'],
         },
         grid: [
-          { left: 64, right: 28, top: 52, height: 390 },
-          { left: 64, right: 28, top: 478, height: 80 },
-          { left: 64, right: 28, top: 592, height: 54 },
+          { left: 64, right: 58, top: 54, height: 330 },
+          { left: 64, right: 58, top: 418, height: 70 },
+          { left: 64, right: 58, top: 526, height: 110 },
+          { left: 64, right: 58, top: 672, height: 52 },
         ],
         xAxis: [
           { type: 'category', data: entry.dates, boundaryGap: true, axisLine: { onZero: false } },
           { type: 'category', data: entry.dates, gridIndex: 1, boundaryGap: true, axisLabel: { show: false } },
           { type: 'category', data: entry.dates, gridIndex: 2, boundaryGap: true, axisLabel: { show: false } },
+          { type: 'category', data: entry.dates, gridIndex: 3, boundaryGap: true, axisLabel: { show: false } },
         ],
         yAxis: [
           { scale: true, splitArea: { show: true }, axisLabel: { formatter: (v) => Number(v).toFixed(0) } },
           { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false } },
-          { scale: true, gridIndex: 2, axisLabel: { formatter: (v) => `${(v * 100).toFixed(0)}%` } },
+          { scale: true, gridIndex: 2, name: '百萬', splitNumber: 3 },
+          { min: 0, max: 1, gridIndex: 2, position: 'right', axisLabel: { formatter: (v) => `${(v * 100).toFixed(0)}%` } },
+          { scale: true, gridIndex: 3, axisLabel: { formatter: (v) => `${(v * 100).toFixed(0)}%` } },
         ],
         dataZoom: [
-          { type: 'inside', xAxisIndex: [0, 1, 2], start: 0, end: 100 },
-          { type: 'slider', xAxisIndex: [0, 1, 2], bottom: 8, start: 0, end: 100 },
+          { type: 'inside', xAxisIndex: [0, 1, 2, 3], start: 0, end: 100 },
+          { type: 'slider', xAxisIndex: [0, 1, 2, 3], bottom: 8, start: 0, end: 100 },
         ],
         series: [
           {
@@ -791,8 +828,8 @@ def _render_html(payload: dict[str, object]) -> str:
           {
             name: '收盤相對進場報酬',
             type: 'line',
-            xAxisIndex: 2,
-            yAxisIndex: 2,
+            xAxisIndex: 3,
+            yAxisIndex: 4,
             data: entry.retPath,
             showSymbol: false,
             lineStyle: { width: 2, color: '#f59e0b' },
@@ -800,6 +837,46 @@ def _render_html(payload: dict[str, object]) -> str:
               symbol: 'none',
               label: { show: false },
               data: [{ yAxis: 0, lineStyle: { color: '#64748b', type: 'dashed' } }],
+            },
+          },
+          {
+            name: '權證正淨買(百萬)',
+            type: 'bar',
+            xAxisIndex: 2,
+            yAxisIndex: 2,
+            data: entry.warrantPosnetM,
+            itemStyle: { color: '#2563eb', opacity: 0.55 },
+          },
+          {
+            name: '權證淨買百分位',
+            type: 'line',
+            xAxisIndex: 2,
+            yAxisIndex: 3,
+            data: entry.warrantPosnetPctPath,
+            showSymbol: false,
+            lineStyle: { width: 2, color: '#7c3aed' },
+            markLine: {
+              symbol: 'none',
+              label: { formatter: '{b}' },
+              data: [
+                { name: '98% 門檻', yAxis: 0.98, lineStyle: { color: '#7c3aed', type: 'dashed' } },
+              ],
+            },
+          },
+          {
+            name: '權證動態家數百分位',
+            type: 'line',
+            xAxisIndex: 2,
+            yAxisIndex: 3,
+            data: entry.warrantDynKPctPath,
+            showSymbol: false,
+            lineStyle: { width: 2, color: '#0891b2' },
+            markLine: {
+              symbol: 'none',
+              label: { formatter: '{b}' },
+              data: [
+                { name: '90% 門檻', yAxis: 0.90, lineStyle: { color: '#0891b2', type: 'dashed' } },
+              ],
             },
           },
         ],
@@ -860,8 +937,8 @@ def _render_html(payload: dict[str, object]) -> str:
 
 
 def main() -> None:
-    trades, signals, ohlc = _load_data()
-    payload = _build_payload(trades, signals, ohlc)
+    trades, signals, features = _load_data()
+    payload = _build_payload(trades, signals, features)
     ensure_dir(OUTPUT_HTML.parent)
     OUTPUT_HTML.write_text(_render_html(payload), encoding="utf-8")
     print(f"Wrote {OUTPUT_HTML.relative_to(PROJECT_ROOT)}")
