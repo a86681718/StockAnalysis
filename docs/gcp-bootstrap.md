@@ -23,6 +23,7 @@ It provisions:
   - Cloud Tasks / Scheduler invoker service account
   - Cloud Build writer access to Artifact Registry
   - Cloud Build log writing on projects where builds run as the default compute service account
+  - Service Account User on the invoker service account so prepare services can mint Cloud Tasks OIDC tokens
 - Cloud Tasks queues:
   - `twse-crawl-queue`
   - `tpex-crawl-queue`

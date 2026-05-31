@@ -98,6 +98,17 @@ grant_project_role() {
     --quiet >/dev/null
 }
 
+grant_service_account_role() {
+  local service_account_email="$1"
+  local member="$2"
+  local role="$3"
+
+  gcloud iam service-accounts add-iam-policy-binding "${service_account_email}" \
+    --member="${member}" \
+    --role="${role}" \
+    --quiet >/dev/null
+}
+
 ensure_artifact_repo() {
   if gcloud artifacts repositories describe "${REPO_NAME}" --location="${REGION}" >/dev/null 2>&1; then
     log "Artifact Registry repo ${REPO_NAME} already exists"
@@ -171,6 +182,7 @@ configure_iam() {
   grant_project_role "serviceAccount:${RUNTIME_SERVICE_ACCOUNT}" "roles/logging.logWriter"
   grant_project_role "serviceAccount:${INVOKER_SERVICE_ACCOUNT}" "roles/run.invoker"
   grant_project_role "serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" "roles/artifactregistry.writer"
+  grant_service_account_role "${INVOKER_SERVICE_ACCOUNT}" "serviceAccount:${RUNTIME_SERVICE_ACCOUNT}" "roles/iam.serviceAccountUser"
 }
 
 build_images() {
