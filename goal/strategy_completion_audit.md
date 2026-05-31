@@ -13,6 +13,8 @@ This audit checks the user's explicit objective:
 
 The audit uses current repo artifacts as the source of truth and recomputes the metrics from saved trade files where possible.
 
+For the current canonical four-strategy registry used for ongoing tracking, see `goal/strategy_registry.md`.
+
 ## Result
 
 The explicit objective is satisfied in the current repo evidence:

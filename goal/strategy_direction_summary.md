@@ -4,6 +4,8 @@ Updated: 2026-05-30
 
 This note maps the three requested trading directions to the current evidence in this repo.
 
+For the current canonical four-strategy registry used for ongoing tracking, see `goal/strategy_registry.md`.
+
 ## Current Answer
 
 The strongest high-return strategy so far is direction 3, with direction 1 used as a chip-quality filter:
