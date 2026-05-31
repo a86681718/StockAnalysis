@@ -167,6 +167,8 @@ configure_iam() {
   grant_project_role "serviceAccount:${RUNTIME_SERVICE_ACCOUNT}" "roles/datastore.user"
   grant_project_role "serviceAccount:${RUNTIME_SERVICE_ACCOUNT}" "roles/cloudtasks.enqueuer"
   grant_project_role "serviceAccount:${RUNTIME_SERVICE_ACCOUNT}" "roles/run.developer"
+  grant_project_role "serviceAccount:${RUNTIME_SERVICE_ACCOUNT}" "roles/artifactregistry.writer"
+  grant_project_role "serviceAccount:${RUNTIME_SERVICE_ACCOUNT}" "roles/logging.logWriter"
   grant_project_role "serviceAccount:${INVOKER_SERVICE_ACCOUNT}" "roles/run.invoker"
   grant_project_role "serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" "roles/artifactregistry.writer"
 }

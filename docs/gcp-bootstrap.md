@@ -22,6 +22,7 @@ It provisions:
   - runtime service account
   - Cloud Tasks / Scheduler invoker service account
   - Cloud Build writer access to Artifact Registry
+  - Cloud Build log writing on projects where builds run as the default compute service account
 - Cloud Tasks queues:
   - `twse-crawl-queue`
   - `tpex-crawl-queue`
@@ -96,4 +97,5 @@ scripts/deploy_gcp_environment.sh all
   - Cloud Scheduler jobs
 - `gcloud run deploy` and `gcloud run jobs deploy` act as upserts, so rerunning the script updates services and jobs in place.
 - The runtime service account defaults to the project default compute service account because that matches the current live deployment.
+- On some newer projects, Cloud Build also runs as the default compute service account instead of the legacy `${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com`, so the bootstrap script grants Artifact Registry write and Cloud Logging write to the runtime/default compute service account as well.
 - Cloud Tasks in `prepare-*` code mint OIDC tokens as `cloud-run@<PROJECT_ID>.iam.gserviceaccount.com`, so the script explicitly creates and grants that service account.
