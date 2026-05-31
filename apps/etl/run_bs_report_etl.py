@@ -76,13 +76,40 @@ def save_manifest(path: Path, manifest: dict[str, dict], dry_run: bool) -> None:
         json.dump(manifest, handle, ensure_ascii=False, indent=2, sort_keys=True)
 
 
-def sync_market(paths: MarketPaths, gcs_base_uri: str, dry_run: bool) -> None:
+def list_remote_folders(paths: MarketPaths, gcs_base_uri: str) -> list[str]:
     source = f"{gcs_base_uri.rstrip('/')}/{paths.market}/"
-    cmd = ["gcloud", "storage", "rsync", "-r", source, str(paths.inbox_dir) + "/"]
-    print("[SYNC]", " ".join(cmd))
-    if dry_run:
-        return
-    subprocess.run(cmd, check=True)
+    cmd = ["gcloud", "storage", "ls", source]
+    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    folders: list[str] = []
+    for line in result.stdout.splitlines():
+        folder = line.rstrip("/").split("/")[-1]
+        if len(folder) == 8 and folder.isdigit():
+            folders.append(folder)
+    return sorted(set(folders))
+
+
+def sync_market(paths: MarketPaths, manifest: dict[str, dict], since: str | None, gcs_base_uri: str, dry_run: bool) -> int:
+    remote_folders = list_remote_folders(paths, gcs_base_uri)
+    pending_remote_folders = [
+        folder_name
+        for folder_name in remote_folders
+        if (not since or folder_name >= since)
+        and manifest.get(folder_name, {}).get("status") != "success"
+    ]
+
+    print(f"[SYNC] {paths.market}")
+    print(f"  remote folders: {len(remote_folders)}")
+    print(f"  folders to copy: {len(pending_remote_folders)}")
+
+    for folder_name in pending_remote_folders:
+        source = f"{gcs_base_uri.rstrip('/')}/{paths.market}/{folder_name}"
+        cmd = ["gcloud", "storage", "cp", "-r", source, str(paths.inbox_dir)]
+        print("[SYNC]", " ".join(cmd))
+        if dry_run:
+            continue
+        subprocess.run(cmd, check=True)
+
+    return len(pending_remote_folders)
 
 
 def should_process(folder: Path, manifest_entry: dict | None, since: str | None) -> bool:
@@ -177,9 +204,12 @@ def main() -> int:
 
     for market in markets:
         paths = build_paths(market)
+        manifest = load_manifest(paths.manifest_path)
+        synced_folders = 0
         if args.sync:
-            sync_market(paths, args.gcs_base_uri, args.dry_run)
+            synced_folders = sync_market(paths, manifest, args.since, args.gcs_base_uri, args.dry_run)
         summaries[market] = process_market(paths, args)
+        summaries[market]["synced_folders"] = synced_folders
 
     print("\n[SUMMARY]")
     for market, summary in summaries.items():

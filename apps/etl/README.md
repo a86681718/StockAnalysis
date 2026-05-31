@@ -12,6 +12,8 @@ uv run apps/etl/run_bs_report_etl.py --market twse --sync
 uv run apps/etl/run_bs_report_etl.py --market all --sync
 ```
 
+When `--sync` is enabled, the script now reads the local manifest first, lists remote GCS date folders, and only copies folders that do not already have `status=success` in the manifest. It no longer performs a full recursive `rsync` of the market prefix.
+
 ## Bs-report pipeline layout
 
 The pipeline expects these directories under `data/bs_report/`:
@@ -33,7 +35,7 @@ data/bs_report/
 
 - `run_bs_report_etl.py`
   - orchestration entry point
-  - optional GCS sync
+  - optional manifest-aware GCS sync
   - manifest-based skip logic
   - archive processed folders
 - `bs_report_pipeline.py`
