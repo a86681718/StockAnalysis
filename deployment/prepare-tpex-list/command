@@ -1,14 +1,15 @@
-
+REGION="${REGION:-asia-east1}"
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='get(projectNumber)')
 gcloud run deploy prepare-tpex-list \
   --source ./deployment/prepare-tpex-list \
-  --region asia-east1 \
+  --region "${REGION}" \
   --memory 512Mi \
   --cpu 1 \
   --concurrency 80 \
   --timeout 3600 \
   --min-instances 1 \
   --max-instances 10 \
-   --set-env-vars "QUEUE_NAME=tpex-crawl-queue,FUNCTION_URL=https://trigger-tpex-job-$PROJECT_NUMBER.asia-east1.run.app" \
+   --set-env-vars "QUEUE_NAME=tpex-crawl-queue,FUNCTION_URL=https://trigger-tpex-job-$PROJECT_NUMBER.${REGION}.run.app,LOCATION=${REGION}" \
   --ingress all \
   --cpu-boost \
   --quiet

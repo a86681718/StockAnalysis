@@ -289,7 +289,10 @@ if __name__ == "__main__":
     zip_folder(str(data_path), zip_name)
 
     # Step 2: 上傳
-    bucket_name = 'stock-crawler-bucket-20250908'
+    bucket_name = os.environ.get("STOCK_CRAWLER_BUCKET")
+    if not bucket_name:
+        logging.error("Missing STOCK_CRAWLER_BUCKET environment variable.")
+        sys.exit(1)
 
     gcs_blob_name = f'bs_report/' + zip_name
     upload_to_gcs(bucket_name, zip_name, gcs_blob_name)

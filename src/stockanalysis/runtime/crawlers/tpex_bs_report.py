@@ -18,7 +18,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Logging configuration
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-BUCKET_NAME = os.environ.get('STOCK_CRAWLER_BUCKET', 'stock-crawler-bucket-20250908')
+BUCKET_NAME = os.environ.get('STOCK_CRAWLER_BUCKET')
 MANIFEST_CONTENT = {
     "manifest_version": 3,
     "name": "Turnstile Patcher",
@@ -282,4 +282,7 @@ def main():
             logging.error(f"Failed to crawl data for stock {symbol} after 3 retries")
 
 if __name__ == "__main__":
+    if not BUCKET_NAME:
+        logging.error("Missing STOCK_CRAWLER_BUCKET environment variable.")
+        sys.exit(1)
     main()

@@ -21,7 +21,6 @@ LOCATION = os.environ.get("LOCATION", "asia-east1")
 FUNCTION_URL = os.environ.get("FUNCTION_URL")  # Cloud Function B 的 URL
 # QUEUE_NAME = "stock-crawl-queue"   # 你事先建立的 Queue 名稱
 # LOCATION = "asia-east1"
-# FUNCTION_URL = f"https://trigger-run-job-514324377659.asia-east1.run.app"  # Cloud Function B 的 URL
 
 client = firestore.Client()
 tasks_client = tasks_v2.CloudTasksClient()

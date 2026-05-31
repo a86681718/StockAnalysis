@@ -1,14 +1,15 @@
-PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='get(projectNumber)')
+REGION="${REGION:-asia-east1}"
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='get(projectNumber)')
 gcloud run deploy prepare-twse-list \
   --source ./deployment/prepare-twse-list \
-  --region asia-east1 \
+  --region "${REGION}" \
   --cpu 2 \
   --memory 8Gi \
   --concurrency 5 \
   --timeout 3600 \
   --min-instances 0 \
   --max-instances 5 \
-  --set-env-vars "QUEUE_NAME=twse-crawl-queue,FUNCTION_URL=https://trigger-twse-job-$PROJECT_NUMBER.asia-east1.run.app" \
+  --set-env-vars "QUEUE_NAME=twse-crawl-queue,FUNCTION_URL=https://trigger-twse-job-$PROJECT_NUMBER.${REGION}.run.app,LOCATION=${REGION}" \
   --ingress all \
   --cpu-boost \
   --quiet

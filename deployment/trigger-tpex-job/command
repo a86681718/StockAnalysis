@@ -1,6 +1,7 @@
+REGION="${REGION:-asia-east1}"
 gcloud run deploy trigger-tpex-job \
   --source ./deployment/trigger-tpex-job \
-  --region asia-east1 \
+  --region "${REGION}" \
   --cpu 1 \
   --memory 512Mi \
   --concurrency 50 \

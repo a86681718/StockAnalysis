@@ -27,7 +27,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Global variables
 LOGGING_LEVEL = os.environ.get('LOGGING_LEVEL', 'INFO').upper()
-BUCKET_NAME = os.environ.get('STOCK_CRAWLER_BUCKET', 'stock-crawler-bucket-20250908')
+BUCKET_NAME = os.environ.get('STOCK_CRAWLER_BUCKET')
 ROOT_URL = 'https://bsr.twse.com.tw/bshtm/'
 ALLOWED_CHARS = 'ACDEFGHJKLNPQRTUVXYZ2346789'
 REQUEST_TIMEOUT = 2
@@ -489,6 +489,10 @@ def process_symbol(
 if __name__ == "__main__":
     logging.info(f"Start time: {datetime.now()}")
     start_time = datetime.now()
+
+    if not BUCKET_NAME:
+        logging.error("Missing STOCK_CRAWLER_BUCKET environment variable.")
+        sys.exit(1)
 
     rerun_count, remaining_args = extract_rerun_count(sys.argv[1:])
     sys.argv = [sys.argv[0]] + remaining_args
