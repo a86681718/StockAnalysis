@@ -215,7 +215,7 @@ def main(request: Request | None = None):
             logging.info(f"Fetched {len(symbols)} symbols from Firestore collection {collection_name}")
         else:
             logging.warning(f"No symbols found in Firestore collection {collection_name}, fallback to crawl")
-            symbols = get_stock_list(data_dt)
+            symbols = get_stock_list(data_dt) + get_warrant_list(data_dt)
 
             create_collection_if_not_exists(collection_name)
             for symbol in symbols:
