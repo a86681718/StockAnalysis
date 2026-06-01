@@ -8,7 +8,7 @@ PROJECT_ID="${PROJECT_ID:-}"
 REGION="${REGION:-asia-east1}"
 REPO_NAME="${REPO_NAME:-my-repo}"
 IMAGE_TAG="${IMAGE_TAG:-$(date +%Y%m%d)}"
-BUCKET_NAME="${BUCKET_NAME:-stock-crawler-bucket-$(date +%Y%m%d)}"
+BUCKET_NAME="${BUCKET_NAME:-}"
 RUNTIME_SERVICE_ACCOUNT="${RUNTIME_SERVICE_ACCOUNT:-}"
 INVOKER_SERVICE_ACCOUNT="${INVOKER_SERVICE_ACCOUNT:-}"
 TWSE_BATCH_SIZE="${TWSE_BATCH_SIZE:-3500}"
@@ -24,7 +24,7 @@ Environment variables:
   REGION                     Optional. Default: asia-east1
   REPO_NAME                  Optional. Default: my-repo
   IMAGE_TAG                  Optional. Default: current YYYYMMDD
-  BUCKET_NAME                Optional. Default: stock-crawler-bucket-YYYYMMDD
+  BUCKET_NAME                Optional. Default: stock-crawler-bucket-<PROJECT_ID>
   RUNTIME_SERVICE_ACCOUNT    Optional. Default: <PROJECT_NUMBER>-compute@developer.gserviceaccount.com
   INVOKER_SERVICE_ACCOUNT    Optional. Default: cloud-run@<PROJECT_ID>.iam.gserviceaccount.com
   TWSE_BATCH_SIZE            Optional. Default: 3500
@@ -41,6 +41,10 @@ require_project() {
     echo "PROJECT_ID is required." >&2
     usage
     exit 1
+  fi
+
+  if [[ -z "${BUCKET_NAME}" ]]; then
+    BUCKET_NAME="stock-crawler-bucket-${PROJECT_ID}"
   fi
 }
 

@@ -78,7 +78,7 @@ scripts/deploy_gcp_environment.sh all
 - `IMAGE_TAG`
   - default current `YYYYMMDD`
 - `BUCKET_NAME`
-  - default `stock-crawler-bucket-YYYYMMDD`
+  - default `stock-crawler-bucket-<PROJECT_ID>`
 - `RUNTIME_SERVICE_ACCOUNT`
   - default `<PROJECT_NUMBER>-compute@developer.gserviceaccount.com`
 - `INVOKER_SERVICE_ACCOUNT`
