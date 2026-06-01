@@ -2,6 +2,8 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app/src
+ENV STOCKANALYSIS_ROOT=/app
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y \
@@ -29,6 +31,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 複製 Python 檔案
 COPY apps/tpex/crawler-tpex-bsreport.py /app/crawler-tpex-bsreport.py
+COPY src/ /app/src/
 COPY apps/tpex/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 ENTRYPOINT ["/app/entrypoint.sh"]

@@ -6,7 +6,10 @@ import sys
 from pathlib import Path
 
 
-for candidate in (Path(__file__).resolve().parents[1] / "src", Path(__file__).resolve().parents[2] / "src"):
+script_path = Path(__file__).resolve()
+candidate_roots = [script_path.parent / "src", *(parent / "src" for parent in script_path.parents)]
+
+for candidate in candidate_roots:
     if candidate.exists():
         sys.path.insert(0, str(candidate))
         break
