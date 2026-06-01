@@ -306,7 +306,7 @@ upsert_scheduler_job() {
       --time-zone="Asia/Taipei" \
       --uri="${uri}" \
       --http-method=POST \
-      --headers="Content-Type=application/json,User-Agent=Google-Cloud-Scheduler" \
+      --update-headers="Content-Type=application/json,User-Agent=Google-Cloud-Scheduler" \
       --message-body="${body}" \
       --oidc-service-account-email="${INVOKER_SERVICE_ACCOUNT}" \
       --oidc-token-audience="${uri}" \
