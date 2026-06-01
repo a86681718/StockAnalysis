@@ -407,9 +407,8 @@ def crawl_data(stock_code: str, model, data_dt: str, paths: CrawlerPaths, max_re
             save_report(report_df, output_path)
             logging.info("Successfully crawled data for stock: %s", stock_code)
             return output_path
-        except Exception as exc:
-            logging.error("Error while crawling data for stock %s: %s", stock_code, exc)
-            logging.debug(traceback.format_exc())
+        except Exception:
+            logging.exception("Error while crawling data for stock %s", stock_code)
         finally:
             session.close()
 
@@ -455,7 +454,11 @@ def process_symbol(
         return SymbolResult.RETRY
 
     if not doc.exists:
-        logging.debug("Symbol %s not found in Firestore, skipping.", symbol)
+        logging.warning(
+            "Symbol %s not found in Firestore collection %s; skipping crawl.",
+            symbol,
+            collection_name,
+        )
         return SymbolResult.SKIP
 
     crawl_result = crawl_data(symbol, model, data_dt, paths)

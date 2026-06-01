@@ -62,13 +62,20 @@ def trigger_run_job(request: Request):
             doc_ref = firestore_client.collection(collection_name).document(symbol)
             doc = doc_ref.get()
             if not doc.exists:
-                logging.debug(f"Symbol {symbol} not found in Firestore, skipping.")
+                logging.warning(
+                    "Symbol %s not found in Firestore collection %s; skipping before job trigger.",
+                    symbol,
+                    collection_name,
+                )
                 skip_symbols.append(symbol)
                 continue
             else:
                 doc_ref.update({"status": "running"})
                 logging.info(f"[{symbol}] Updated Firestore status to 'running'")
         symbols = [x for x in symbols if x not in skip_symbols]
+        if not symbols:
+            logging.warning("No runnable symbols remain for %s after Firestore filtering.", collection_name)
+            return f"No runnable symbols for {collection_name}", 200
 
         # 準備 Cloud Run Job 路徑
         parent = f"projects/{PROJECT_ID}/locations/{LOCATION}"
