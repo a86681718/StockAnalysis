@@ -12,6 +12,7 @@ from stockanalysis.analysis.broker_branch_accumulation import (
     build_core_feature_table,
     detect_events,
     is_branch_name,
+    load_warrant_mapping,
 )
 
 
@@ -108,6 +109,27 @@ class BrokerBranchAccumulationTest(unittest.TestCase):
         self.assertEqual(top["event_type"], "combined")
         self.assertGreaterEqual(top["stock_window_net_buy"], 300.0)
         self.assertIn("030001", top["warrant_window_ids"])
+
+    def test_warrant_mapping_coalesces_listing_date_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "warrant.csv"
+            pd.DataFrame(
+                {
+                    "權證代號": ["030001"],
+                    "權證簡稱": ["測試權證"],
+                    "標的代號": ["1234"],
+                    "標的名稱": ["測試"],
+                    "上市日期": [""],
+                    "上櫃日期": ["2026/01/05"],
+                    "最後交易日": ["2026/06/01"],
+                }
+            ).to_csv(path, index=False, encoding="utf-8-sig")
+
+            mapping = load_warrant_mapping(path)
+
+        self.assertEqual(mapping.loc[0, "warrant_id"], "030001")
+        self.assertEqual(mapping.loc[0, "underlying_stock_id"], "1234")
+        self.assertEqual(mapping.loc[0, "start_date"], pd.Timestamp("2026-01-05"))
 
 
 if __name__ == "__main__":

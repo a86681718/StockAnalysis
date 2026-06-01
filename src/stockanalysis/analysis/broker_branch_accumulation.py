@@ -116,7 +116,19 @@ def _first_nonempty(values: Iterable[object]) -> str:
 
 
 def _parse_mapping_date(series: pd.Series) -> pd.Series:
-    return pd.to_datetime(series.astype(str).str.strip().replace({"": np.nan, "nan": np.nan}), errors="coerce")
+    cleaned = series.astype(str).str.strip()
+    cleaned = cleaned.mask(cleaned.str.lower().isin({"", "nan", "none"}), np.nan)
+    return pd.to_datetime(cleaned, errors="coerce")
+
+
+def _coalesce_mapping_dates(raw: pd.DataFrame, candidates: tuple[str, ...]) -> pd.Series:
+    parsed = [_parse_mapping_date(raw[col]) for col in candidates if col in raw.columns]
+    if not parsed:
+        return pd.Series(pd.NaT, index=raw.index)
+    out = parsed[0]
+    for series in parsed[1:]:
+        out = out.fillna(series)
+    return out
 
 
 def load_warrant_mapping(path: Path) -> pd.DataFrame:
@@ -142,17 +154,14 @@ def load_warrant_mapping(path: Path) -> pd.DataFrame:
     if not col_map["warrant_id"] or not col_map["underlying_stock_id"]:
         raise ValueError(f"{path} must contain warrant and underlying columns")
 
-    listing_col = next((c for c in ("start_date", "上市日期", "上櫃日期") if c in raw.columns), None)
-    end_col = next((c for c in ("end_date", "最後交易日", "履約截止日") if c in raw.columns), None)
-
     out = pd.DataFrame(
         {
             "warrant_id": raw[col_map["warrant_id"]].map(normalize_code),
             "underlying_stock_id": raw[col_map["underlying_stock_id"]].map(normalize_code),
             "warrant_name": raw[col_map["warrant_name"]].astype(str).str.strip() if col_map["warrant_name"] else "",
             "underlying_name": raw[col_map["underlying_name"]].astype(str).str.strip() if col_map["underlying_name"] else "",
-            "start_date": _parse_mapping_date(raw[listing_col]) if listing_col else pd.NaT,
-            "end_date": _parse_mapping_date(raw[end_col]) if end_col else pd.NaT,
+            "start_date": _coalesce_mapping_dates(raw, ("start_date", "上市日期", "上櫃日期")),
+            "end_date": _coalesce_mapping_dates(raw, ("end_date", "最後交易日", "履約截止日")),
         }
     )
     out = out[(out["warrant_id"] != "") & (out["underlying_stock_id"] != "")].copy()
