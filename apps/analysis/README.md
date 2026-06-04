@@ -27,6 +27,7 @@ These are the main bs-report research iterations. If you need a current baseline
 
 - `run_ml_bband_surge.py`
 - `run_ml_breakout10.py`
+- `run_direction3_pipeline.py`
 - `run_ml_mfe10.py`
 - `run_ml_mfe10_two_stage.py`
 - `run_ml_mfe10_penalty_search.py`
