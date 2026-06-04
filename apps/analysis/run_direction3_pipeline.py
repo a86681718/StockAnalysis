@@ -45,6 +45,13 @@ class ReplayArtifacts:
     selected: pd.DataFrame
 
 
+def _latest_complete_signal_date(ohlc_map: dict[str, dict[str, object]], hold_days: int) -> pd.Timestamp | None:
+    trading_dates = sorted({pd.Timestamp(d) for data in ohlc_map.values() for d in data["dates"]})
+    if len(trading_dates) <= hold_days + 1:
+        return None
+    return pd.Timestamp(trading_dates[-(hold_days + 2)])
+
+
 def _prediction_label_col(df: pd.DataFrame) -> str | None:
     for col in df.columns:
         if col not in {"symbol", "date", "pred", "fold"}:
@@ -158,6 +165,11 @@ def _save_prediction_csv(df: pd.DataFrame, path: Path, label_col: str | None) ->
     out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
     path.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(path, index=False)
+
+
+def _write_live_summary(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _build_pred_map(preds: pd.DataFrame) -> dict[pd.Timestamp, pd.DataFrame]:
@@ -522,6 +534,57 @@ def _build_rolling_windows(
     return pd.DataFrame(rows)
 
 
+def _build_latest_live_candidates(
+    preds: pd.DataFrame,
+    label_col: str | None,
+    cfg: BacktestConfig,
+    repair_stock_buy20_min: float,
+    repair_warrant_hhi20_max: float,
+    topratio_max: float,
+    day_buy20_min: float,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, object]]:
+    if preds.empty:
+        empty = pd.DataFrame(columns=["symbol", "date", "pred"])
+        return empty, empty, empty, {
+            "latest_signal_date": None,
+            "repair_count": 0,
+            "topratio_count": 0,
+            "selected_count_pre_gap": 0,
+            "mean_buy20_selected": None,
+            "mean_topratio_selected": None,
+            "passes_day_buy20_gate": False,
+            "candidate_symbols": [],
+            "note": "No latest predictions available.",
+        }
+
+    latest_date = pd.Timestamp(preds["date"].max())
+    latest = preds[preds["date"] == latest_date].copy().sort_values("pred", ascending=False).reset_index(drop=True)
+    repair = latest[
+        (latest["stock_net_buy_days_20"] >= repair_stock_buy20_min)
+        & (latest["warrant_hhi_posnet_20"] <= repair_warrant_hhi20_max)
+    ].copy()
+    topratio = repair[repair["top_posnet_ratio"] <= topratio_max].copy()
+    selected = _select_candidates(topratio, cfg).copy()
+
+    mean_buy20 = float(selected["stock_net_buy_days_20"].mean()) if not selected.empty else np.nan
+    mean_topratio = float(selected["top_posnet_ratio"].mean()) if not selected.empty else np.nan
+    passes_day_gate = bool(not selected.empty and np.isfinite(mean_buy20) and mean_buy20 >= day_buy20_min)
+    final_candidates = selected.copy() if passes_day_gate else selected.iloc[0:0].copy()
+
+    summary = {
+        "latest_signal_date": str(latest_date.date()),
+        "repair_count": int(len(repair)),
+        "topratio_count": int(len(topratio)),
+        "selected_count_pre_gap": int(len(selected)),
+        "mean_buy20_selected": mean_buy20 if np.isfinite(mean_buy20) else None,
+        "mean_topratio_selected": mean_topratio if np.isfinite(mean_topratio) else None,
+        "passes_day_buy20_gate": passes_day_gate,
+        "candidate_symbols": final_candidates["symbol"].astype(str).tolist(),
+        "note": "Candidates are pre-open only; next-open gap filter still applies at execution time.",
+    }
+    return repair, topratio, final_candidates, summary
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Build the full direction-3 artifact chain")
     ap.add_argument("--preds", type=Path, default=ML_RUNS / "breakout10_predictions_wf.csv")
@@ -530,7 +593,7 @@ def main() -> None:
     ap.add_argument("--flow-warrant", type=Path, default=DATA_DERIVED / "flow_warrant_daily_by_underlying.parquet")
     ap.add_argument("--ohlc", type=Path, default=DATA_DERIVED / "ohlc.parquet")
     ap.add_argument("--start", default="2025-11-01")
-    ap.add_argument("--end", default="2026-02-03")
+    ap.add_argument("--end", default="")
     ap.add_argument("--repair-stock-buy20-min", type=float, default=1.0)
     ap.add_argument("--repair-warrant-hhi20-max", type=float, default=0.80)
     ap.add_argument("--topratio-max", type=float, default=0.610)
@@ -554,20 +617,17 @@ def main() -> None:
     ap.add_argument("--out-final-trades", type=Path, default=ML_RUNS / "repair_branch_topratio0610_daybuy20ge4_trades.csv")
     ap.add_argument("--out-final-summary", type=Path, default=ML_RUNS / "repair_branch_topratio0610_daybuy20ge4_summary.json")
     ap.add_argument("--out-final-rolling", type=Path, default=ML_RUNS / "repair_branch_topratio0610_daybuy20ge4_rolling_windows.csv")
+    ap.add_argument("--latest-preds", type=Path, default=ML_RUNS / "breakout10_latest_wf.csv")
+    ap.add_argument("--out-latest-repair-preds", type=Path, default=ML_RUNS / "breakout10_latest_wf_repair_branch.csv")
+    ap.add_argument("--out-latest-topratio-preds", type=Path, default=ML_RUNS / "breakout10_latest_wf_repair_branch_topratio0610.csv")
+    ap.add_argument("--out-latest-final-candidates", type=Path, default=ML_RUNS / "breakout10_latest_wf_repair_branch_topratio0610_daybuy20ge4_candidates.csv")
+    ap.add_argument("--out-latest-summary", type=Path, default=ML_RUNS / "breakout10_latest_wf_repair_branch_topratio0610_daybuy20ge4_summary.json")
     args = ap.parse_args()
 
     start = pd.Timestamp(args.start)
-    end = pd.Timestamp(args.end)
     preds, label_col = _load_breakout_predictions(args.preds)
     features = _build_repair_features(args.scored, args.flow_stock, args.flow_warrant)
     merged = _merge_predictions_with_features(preds, features)
-
-    repair = merged[
-        (merged["stock_net_buy_days_20"] >= args.repair_stock_buy20_min)
-        & (merged["warrant_hhi_posnet_20"] <= args.repair_warrant_hhi20_max)
-    ].copy()
-    topratio = repair[repair["top_posnet_ratio"] <= args.topratio_max].copy()
-
     ohlc_map = _load_ohlc_map(args.ohlc)
     cfg = BacktestConfig(
         select_mode="top_pct",
@@ -590,6 +650,17 @@ def main() -> None:
         tax_rate_sell=0.003,
         slippage=0.0005,
     )
+    auto_end = _latest_complete_signal_date(ohlc_map, cfg.hold_days)
+    end = pd.Timestamp(args.end) if str(args.end).strip() else auto_end
+    if end is None:
+        raise RuntimeError("unable to derive a complete replay end date from OHLC coverage")
+    end = min(end, pd.Timestamp(preds["date"].max()))
+
+    repair = merged[
+        (merged["stock_net_buy_days_20"] >= args.repair_stock_buy20_min)
+        & (merged["warrant_hhi_posnet_20"] <= args.repair_warrant_hhi20_max)
+    ].copy()
+    topratio = repair[repair["top_posnet_ratio"] <= args.topratio_max].copy()
 
     topratio_replay = _replay_with_selected(
         topratio,
@@ -653,6 +724,22 @@ def main() -> None:
     topratio_rolling.to_csv(args.out_topratio_rolling, index=False)
     final_rolling.to_csv(args.out_final_rolling, index=False)
 
+    latest_preds, latest_label_col = _load_breakout_predictions(args.latest_preds)
+    latest_merged = _merge_predictions_with_features(latest_preds, features)
+    latest_repair, latest_topratio, latest_final, latest_summary = _build_latest_live_candidates(
+        latest_merged,
+        latest_label_col,
+        cfg,
+        float(args.repair_stock_buy20_min),
+        float(args.repair_warrant_hhi20_max),
+        float(args.topratio_max),
+        float(args.day_buy20_min),
+    )
+    _save_prediction_csv(latest_repair, args.out_latest_repair_preds, latest_label_col)
+    _save_prediction_csv(latest_topratio, args.out_latest_topratio_preds, latest_label_col)
+    _save_prediction_csv(latest_final, args.out_latest_final_candidates, latest_label_col)
+    _write_live_summary(args.out_latest_summary, latest_summary)
+
     print(f"Wrote: {args.out_repair_preds}")
     print(f"Wrote: {args.out_topratio_preds}")
     print(f"Wrote: {args.out_day_quality}")
@@ -663,6 +750,10 @@ def main() -> None:
     print(f"Wrote: {args.out_final_trades}")
     print(f"Wrote: {args.out_final_summary}")
     print(f"Wrote: {args.out_final_rolling}")
+    print(f"Wrote: {args.out_latest_repair_preds}")
+    print(f"Wrote: {args.out_latest_topratio_preds}")
+    print(f"Wrote: {args.out_latest_final_candidates}")
+    print(f"Wrote: {args.out_latest_summary}")
 
 
 if __name__ == "__main__":
