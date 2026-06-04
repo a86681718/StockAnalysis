@@ -274,6 +274,7 @@ def _build_report(
     weak_symbol = leave_one_symbol[~leave_one_symbol["target_pass"]]
     weak_month = leave_one_month[~leave_one_month["target_pass"]]
     weak_signal_day = leave_one_signal_day[~leave_one_signal_day["target_pass"]]
+    signal_days = int(enriched["signal_date"].nunique()) if "signal_date" in enriched.columns else 0
 
     lines = [
         "# Direction 3 Breakout Robustness Report",
@@ -372,7 +373,7 @@ def _build_report(
             "## Interpretation",
             "",
             "- The saved direction-3 candidate still clears the requested target gates under leave-one-symbol/month/signal-day checks.",
-            "- The main risk remains sample size: only 12 trades and 8 signal days are available in this replay window.",
+            f"- The main risk remains sample size: only {full_metrics['trades']} trades and {signal_days} signal days are available in this replay window.",
             "- Entry execution risk looks acceptable in this replay because the saved strategy already rejects next-open gaps above 0.5%; none of the saved trades violates that gate.",
             "- A production decision still needs newer out-of-sample replay data, because this script only audits the existing saved walk-forward window.",
         ]
