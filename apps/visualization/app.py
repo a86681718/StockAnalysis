@@ -561,6 +561,16 @@ def add_bollinger_bands(ohlcv: pd.DataFrame, window: int = 20) -> pd.DataFrame:
     return out
 
 
+def _plot_dates(df: pd.DataFrame, date_col: str = "date") -> list[str]:
+    if df.empty or date_col not in df.columns:
+        return []
+    return pd.to_datetime(df[date_col], errors="coerce").dt.strftime("%Y-%m-%d").tolist()
+
+
+def _plot_values(series: pd.Series) -> list[object]:
+    return series.where(pd.notna(series), None).tolist()
+
+
 def build_figure(
     ohlcv: pd.DataFrame,
     broker_df: pd.DataFrame,
@@ -577,6 +587,7 @@ def build_figure(
     bb_mid = ohlcv["bb_mid"] if "bb_mid" in ohlcv.columns else pd.Series(index=ohlcv.index, dtype=float)
     bb_lower = ohlcv["bb_lower"] if "bb_lower" in ohlcv.columns else pd.Series(index=ohlcv.index, dtype=float)
     bar_width_ms = BAR_WIDTH_MS
+    ohlcv_x = _plot_dates(ohlcv)
 
     row_count = 6 if show_key_branch else 5
     row_heights = [0.40, 0.12, 0.16, 0.16, 0.08, 0.08] if show_key_branch else [0.44, 0.14, 0.18, 0.12, 0.12]
@@ -593,14 +604,14 @@ def build_figure(
 
     # Row 1: Candlestick
     pct_change = ohlcv["close"].pct_change()
-    pct_display = pct_change.map(lambda x: "" if pd.isna(x) else f"{x:+.2%}").to_numpy()
+    pct_display = pct_change.map(lambda x: "" if pd.isna(x) else f"{x:+.2%}").tolist()
     fig.add_trace(
         go.Candlestick(
-            x=ohlcv["date"],
-            open=ohlcv["open"],
-            high=ohlcv["high"],
-            low=ohlcv["low"],
-            close=ohlcv["close"],
+            x=ohlcv_x,
+            open=_plot_values(ohlcv["open"]),
+            high=_plot_values(ohlcv["high"]),
+            low=_plot_values(ohlcv["low"]),
+            close=_plot_values(ohlcv["close"]),
             customdata=pct_display,
             hovertemplate=(
                 "開=%{open:.2f}<br>"
@@ -619,8 +630,8 @@ def build_figure(
 
     fig.add_trace(
         go.Scatter(
-            x=ohlcv["date"],
-            y=bb_upper,
+            x=ohlcv_x,
+            y=_plot_values(bb_upper),
             mode="lines",
             name="BB Upper",
             line=dict(color="#7a7a7a", width=1),
@@ -630,8 +641,8 @@ def build_figure(
     )
     fig.add_trace(
         go.Scatter(
-            x=ohlcv["date"],
-            y=bb_mid,
+            x=ohlcv_x,
+            y=_plot_values(bb_mid),
             mode="lines",
             name="BB Mid",
             line=dict(color="#aaaaaa", width=1, dash="dot"),
@@ -641,8 +652,8 @@ def build_figure(
     )
     fig.add_trace(
         go.Scatter(
-            x=ohlcv["date"],
-            y=bb_lower,
+            x=ohlcv_x,
+            y=_plot_values(bb_lower),
             mode="lines",
             name="BB Lower",
             line=dict(color="#7a7a7a", width=1),
@@ -666,11 +677,11 @@ def build_figure(
         if not ev.empty:
             fig.add_trace(
                 go.Scatter(
-                    x=ev["date"],
-                    y=ev["close"],
+                    x=_plot_dates(ev),
+                    y=_plot_values(ev["close"]),
                     mode="markers",
                     name="關鍵分點事件",
-                    customdata=ev[["broker_name", "event_type", "anomaly_score"]],
+                    customdata=ev[["broker_name", "event_type", "anomaly_score"]].values.tolist(),
                     hovertemplate=(
                         "關鍵分點=%{customdata[0]}<br>"
                         "類型=%{customdata[1]}<br>"
@@ -686,8 +697,8 @@ def build_figure(
         if not ev.empty:
             fig.add_trace(
                 go.Scatter(
-                    x=ev["date"],
-                    y=ev["close"],
+                    x=_plot_dates(ev),
+                    y=_plot_values(ev["close"]),
                     mode="markers",
                     name="Event",
                     marker=dict(color="#f8f000", size=12, symbol="star", line=dict(color="#999900", width=1)),
@@ -699,8 +710,8 @@ def build_figure(
     # Row 2: Volume
     fig.add_trace(
         go.Bar(
-            x=ohlcv["date"],
-            y=ohlcv["volume"],
+            x=ohlcv_x,
+            y=_plot_values(ohlcv["volume"]),
             name="成交量",
             marker_color="#218BE1",
             width=bar_width_ms,
@@ -713,8 +724,8 @@ def build_figure(
     bd = broker_df[broker_df["broker"] == selected_broker].sort_values("date")
     fig.add_trace(
         go.Bar(
-            x=bd["date"],
-            y=bd["buy"],
+            x=_plot_dates(bd),
+            y=_plot_values(bd["buy"]),
             name=f"{selected_broker} 買入",
             marker_color="#d24d57",
             width=bar_width_ms,
@@ -725,8 +736,8 @@ def build_figure(
     )
     fig.add_trace(
         go.Bar(
-            x=bd["date"],
-            y=-bd["sell"],
+            x=_plot_dates(bd),
+            y=_plot_values(-bd["sell"]),
             name=f"{selected_broker} 賣出",
             marker_color="#2e8b57",
             width=bar_width_ms,
@@ -758,8 +769,8 @@ def build_figure(
     if show_key_branch and not wd.empty:
         fig.add_trace(
             go.Bar(
-                x=wd["date"],
-                y=wd["buy"],
+                x=_plot_dates(wd),
+                y=_plot_values(wd["buy"]),
                 name=f"{selected_broker} 權證買入",
                 marker_color="#b42318",
                 width=bar_width_ms,
@@ -770,8 +781,8 @@ def build_figure(
         )
         fig.add_trace(
             go.Bar(
-                x=wd["date"],
-                y=-wd["sell"],
+                x=_plot_dates(wd),
+                y=_plot_values(-wd["sell"]),
                 name=f"{selected_broker} 權證賣出",
                 marker_color="#027a48",
                 width=bar_width_ms,
@@ -785,8 +796,8 @@ def build_figure(
     if not topn_buy_daily.empty:
         fig.add_trace(
             go.Bar(
-                x=topn_buy_daily["date"],
-                y=topn_buy_daily["buy"],
+                x=_plot_dates(topn_buy_daily),
+                y=_plot_values(topn_buy_daily["buy"]),
                 name=f"{topn_label} 買入",
                 marker_color="#d24d57",
                 width=bar_width_ms,
@@ -797,8 +808,8 @@ def build_figure(
         )
         fig.add_trace(
             go.Bar(
-                x=topn_buy_daily["date"],
-                y=-topn_buy_daily["sell"],
+                x=_plot_dates(topn_buy_daily),
+                y=_plot_values(-topn_buy_daily["sell"]),
                 name=f"{topn_label} 賣出",
                 marker_color="#2e8b57",
                 width=bar_width_ms,
@@ -812,8 +823,8 @@ def build_figure(
     if not topn_sell_daily.empty:
         fig.add_trace(
             go.Bar(
-                x=topn_sell_daily["date"],
-                y=topn_sell_daily["buy"],
+                x=_plot_dates(topn_sell_daily),
+                y=_plot_values(topn_sell_daily["buy"]),
                 name=f"{topn_label} 賣超 買入",
                 marker_color="#d24d57",
                 width=bar_width_ms,
@@ -824,8 +835,8 @@ def build_figure(
         )
         fig.add_trace(
             go.Bar(
-                x=topn_sell_daily["date"],
-                y=-topn_sell_daily["sell"],
+                x=_plot_dates(topn_sell_daily),
+                y=_plot_values(-topn_sell_daily["sell"]),
                 name=f"{topn_label} 賣超 賣出",
                 marker_color="#2e8b57",
                 width=bar_width_ms,
