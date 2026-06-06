@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import re
 
@@ -9,11 +10,18 @@ from dash import Dash, dcc, html, Input, Output, State, dash_table, no_update, c
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from stockanalysis.config import resolve_data, resolve_output
+
 
 # -----------------------------
 # Symbol name mapping (latest OHLC csv)
 # -----------------------------
 _SYMBOL_NAME_MAP: dict[str, str] | None = None
+_BROKER_NAME_MAP: dict[str, str] | None = None
+_WARRANT_NAME_MAP: dict[str, str] | None = None
+KEY_BRANCH_TMP_DIR = Path("/private/tmp/broker_branch_accumulation_recent_top160")
+BAR_WIDTH_DAYS = 0.7
+BAR_WIDTH_MS = int(24 * 60 * 60 * 1000 * BAR_WIDTH_DAYS)
 
 
 def load_symbol_name_map() -> dict[str, str]:
@@ -21,7 +29,7 @@ def load_symbol_name_map() -> dict[str, str]:
     if _SYMBOL_NAME_MAP is not None:
         return _SYMBOL_NAME_MAP
 
-    ohlc_dir = Path("data/ohlc")
+    ohlc_dir = resolve_data("ohlc")
     patt = re.compile(r"^(twse|tpex)-(\d{8})\.csv$")
     latest: dict[str, tuple[str, Path]] = {}
     for p in ohlc_dir.glob("*.csv"):
@@ -51,12 +59,281 @@ def load_symbol_name_map() -> dict[str, str]:
     return mapping
 
 
+def load_broker_name_map() -> dict[str, str]:
+    global _BROKER_NAME_MAP
+    if _BROKER_NAME_MAP is not None:
+        return _BROKER_NAME_MAP
+
+    broker_list_path = resolve_data("broker_list.csv")
+    mapping: dict[str, str] = {}
+    if broker_list_path.exists():
+        broker_map = pd.read_csv(broker_list_path, dtype=str, encoding="utf-8-sig")[["證券商代號", "證券商名稱"]].dropna()
+        mapping = dict(zip(broker_map["證券商代號"].str.strip(), broker_map["證券商名稱"].str.strip()))
+    _BROKER_NAME_MAP = mapping
+    return mapping
+
+
+def load_warrant_name_map() -> dict[str, str]:
+    global _WARRANT_NAME_MAP
+    if _WARRANT_NAME_MAP is not None:
+        return _WARRANT_NAME_MAP
+
+    path = resolve_data("warrant", "warrant_list_dedup.csv")
+    mapping: dict[str, str] = {}
+    if path.exists():
+        df = pd.read_csv(path, dtype=str, encoding="utf-8-sig", usecols=lambda c: c in {"權證代號", "權證簡稱"}).fillna("")
+        mapping = dict(zip(df["權證代號"].str.strip(), df["權證簡稱"].str.strip()))
+    _WARRANT_NAME_MAP = mapping
+    return mapping
+
+
+def key_branch_dirs() -> list[Path]:
+    env_dir = os.getenv("BROKER_ACCUMULATION_OUTPUT_DIR")
+    dirs = []
+    if env_dir:
+        dirs.append(Path(env_dir).expanduser())
+    dirs.extend(
+        [
+            resolve_output("analysis", "broker_branch_accumulation"),
+            KEY_BRANCH_TMP_DIR,
+        ]
+    )
+    return dirs
+
+
+def find_key_branch_dir() -> Path | None:
+    for directory in key_branch_dirs():
+        if (directory / "broker_branch_accumulation_events.csv").exists():
+            return directory
+    return None
+
+
+def _latest_matching_file(directory: Path, pattern: str) -> Path | None:
+    matches = sorted(directory.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+    return matches[0] if matches else None
+
+
+def _split_tokens(text: object) -> list[str]:
+    out: list[str] = []
+    for token in str(text or "").split(","):
+        token = token.strip()
+        if not token or token.lower() == "nan" or token.startswith("+"):
+            continue
+        out.append(token)
+    return out
+
+
+def _safe_float(value: object) -> float | None:
+    try:
+        if pd.isna(value):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _fmt_int(value: object) -> str:
+    num = _safe_float(value)
+    if num is None:
+        return "—"
+    return f"{num:,.0f}"
+
+
+def _fmt_pct(value: object) -> str:
+    num = _safe_float(value)
+    if num is None:
+        return "—"
+    return f"{num:.2%}"
+
+
+def _fmt_score(value: object) -> str:
+    num = _safe_float(value)
+    if num is None:
+        return "—"
+    return f"{num:,.2f}"
+
+
+def load_key_branch_events() -> pd.DataFrame:
+    directory = find_key_branch_dir()
+    if directory is None:
+        return pd.DataFrame()
+    path = directory / "broker_branch_accumulation_events.csv"
+    try:
+        events = pd.read_csv(path, dtype={"underlying_stock_id": str}, encoding="utf-8-sig")
+    except Exception:
+        return pd.DataFrame()
+    if events.empty:
+        return events
+    events["underlying_stock_id"] = events["underlying_stock_id"].astype(str).str.strip()
+    events["date"] = pd.to_datetime(events["date"], errors="coerce")
+    events = events.dropna(subset=["date", "underlying_stock_id"]).copy()
+    return events.sort_values(["anomaly_score", "date"], ascending=[False, False]).reset_index(drop=True)
+
+
+def derive_key_branch_cases(events: pd.DataFrame) -> pd.DataFrame:
+    if events.empty:
+        return pd.DataFrame()
+    rows: list[dict[str, object]] = []
+    for (symbol, broker, broker_name), sub in events.groupby(["underlying_stock_id", "broker", "broker_name"], dropna=False):
+        sub = sub.sort_values("date")
+        top = sub.loc[sub["anomaly_score"].idxmax()]
+        rows.append(
+            {
+                "symbol": str(symbol),
+                "broker": str(broker),
+                "broker_name": str(broker_name),
+                "case_start": sub["date"].min(),
+                "case_end": sub["date"].max(),
+                "n_events": int(len(sub)),
+                "event_types": ",".join(sorted(sub["event_type"].dropna().astype(str).unique())),
+                "max_score": top.get("anomaly_score"),
+                "top_date": top.get("date"),
+                "top_event_type": top.get("event_type"),
+                "stock_trigger_any": bool(sub["stock_trigger"].any()) if "stock_trigger" in sub else False,
+                "warrant_trigger_any": bool(sub["warrant_trigger"].any()) if "warrant_trigger" in sub else False,
+                "stock_window_net_buy_max": sub.get("stock_window_net_buy", pd.Series(dtype=float)).max(),
+                "stock_window_branch_share_max": sub.get("stock_window_branch_share", pd.Series(dtype=float)).max(),
+                "stock_window_net_ratio_max": sub.get("stock_window_net_ratio", pd.Series(dtype=float)).max(),
+                "warrant_window_net_buy_max": sub.get("warrant_window_net_buy", pd.Series(dtype=float)).max(),
+                "warrant_window_branch_share_max": sub.get("warrant_window_branch_share", pd.Series(dtype=float)).max(),
+                "warrant_window_net_ratio_max": sub.get("warrant_window_net_ratio", pd.Series(dtype=float)).max(),
+                "warrant_window_count_max": sub.get("warrant_window_count", pd.Series(dtype=float)).max(),
+                "warrant_window_ids_top": top.get("warrant_window_ids", ""),
+                "explanation_top": top.get("explanation", ""),
+            }
+        )
+    return pd.DataFrame(rows).sort_values(["max_score", "n_events"], ascending=[False, False]).reset_index(drop=True)
+
+
+def load_key_branch_cases() -> pd.DataFrame:
+    directory = find_key_branch_dir()
+    if directory is None:
+        return pd.DataFrame()
+    path = _latest_matching_file(directory, "recent_cases_*.csv")
+    if path is not None:
+        try:
+            cases = pd.read_csv(path, dtype={"symbol": str}, encoding="utf-8-sig")
+        except Exception:
+            cases = pd.DataFrame()
+        if not cases.empty:
+            for col in ("case_start", "case_end", "top_date"):
+                if col in cases.columns:
+                    cases[col] = pd.to_datetime(cases[col], errors="coerce")
+            cases["symbol"] = cases["symbol"].astype(str).str.strip()
+            return cases.sort_values(["max_score", "n_events"], ascending=[False, False]).reset_index(drop=True)
+    return derive_key_branch_cases(load_key_branch_events())
+
+
+def key_branch_source_label() -> str:
+    directory = find_key_branch_dir()
+    if directory is None:
+        return "尚未找到關鍵分點輸出"
+    return str(directory)
+
+
+def default_stock_id() -> str:
+    cases = load_key_branch_cases()
+    if not cases.empty and "symbol" in cases.columns:
+        return str(cases.iloc[0]["symbol"])
+    return "2330"
+
+
+def format_case_table(cases: pd.DataFrame, limit: int = 80) -> list[dict[str, object]]:
+    if cases.empty:
+        return []
+    out = cases.head(limit).copy()
+    for col in ("case_start", "case_end", "top_date"):
+        if col in out.columns:
+            out[col] = pd.to_datetime(out[col], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+    out["max_score"] = out["max_score"].map(_fmt_score)
+    out["stock_window_net_buy_max"] = out["stock_window_net_buy_max"].map(_fmt_int)
+    out["stock_window_branch_share_max"] = out["stock_window_branch_share_max"].map(_fmt_pct)
+    out["warrant_window_net_buy_max"] = out["warrant_window_net_buy_max"].map(_fmt_int)
+    out["warrant_window_branch_share_max"] = out["warrant_window_branch_share_max"].map(_fmt_pct)
+    return out.to_dict("records")
+
+
+def format_event_table(events: pd.DataFrame, limit: int = 80) -> list[dict[str, object]]:
+    if events.empty:
+        return []
+    out = events.sort_values(["date", "anomaly_score"], ascending=[False, False]).head(limit).copy()
+    out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+    for col in ("anomaly_score",):
+        out[col] = out[col].map(_fmt_score)
+    for col in ("stock_window_net_buy", "warrant_window_net_buy"):
+        if col in out.columns:
+            out[col] = out[col].map(_fmt_int)
+    for col in ("stock_window_branch_share", "warrant_window_branch_share"):
+        if col in out.columns:
+            out[col] = out[col].map(_fmt_pct)
+    return out.to_dict("records")
+
+
 # -----------------------------
 # Real data loader
 # -----------------------------
-BAR_WIDTH_DAYS = 0.7
-BAR_WIDTH_MS = int(24 * 60 * 60 * 1000 * BAR_WIDTH_DAYS)
-def load_data(stock_id: str, days: int = 240) -> tuple[pd.DataFrame, pd.DataFrame, list[str], list[str]]:
+def _resolve_bs_parquet(symbol: str) -> Path | None:
+    for p in [resolve_data("bs_report", "parquet_twse", f"{symbol}.parquet"), resolve_data("bs_report", "parquet_tpex", f"{symbol}.parquet")]:
+        if p.exists():
+            return p
+    return None
+
+
+def load_warrant_broker_data(key_events: pd.DataFrame, min_date: pd.Timestamp | None, max_date: pd.Timestamp | None) -> pd.DataFrame:
+    if key_events.empty:
+        return pd.DataFrame(columns=["date", "broker", "warrant_id", "warrant_name", "buy", "sell", "net"])
+
+    warrant_ids: set[str] = set()
+    for col in ("warrant_window_ids", "warrant_ids"):
+        if col in key_events.columns:
+            for value in key_events[col].dropna():
+                warrant_ids.update(_split_tokens(value))
+    if not warrant_ids:
+        return pd.DataFrame(columns=["date", "broker", "warrant_id", "warrant_name", "buy", "sell", "net"])
+
+    broker_map = load_broker_name_map()
+    warrant_name_map = load_warrant_name_map()
+    frames: list[pd.DataFrame] = []
+    for warrant_id in sorted(warrant_ids):
+        path = _resolve_bs_parquet(warrant_id)
+        if path is None:
+            continue
+        try:
+            raw = pd.read_parquet(path, columns=["日期", "券商", "買進股數", "賣出股數"])
+        except Exception:
+            continue
+        if raw.empty:
+            continue
+        raw = raw.rename(columns={"日期": "date", "券商": "broker", "買進股數": "buy", "賣出股數": "sell"})
+        raw["date"] = pd.to_datetime(raw["date"], errors="coerce")
+        raw = raw.dropna(subset=["date"])
+        if min_date is not None:
+            raw = raw[raw["date"] >= min_date]
+        if max_date is not None:
+            raw = raw[raw["date"] <= max_date]
+        if raw.empty:
+            continue
+        raw["broker"] = raw["broker"].astype(str).str.strip().map(broker_map).fillna(raw["broker"].astype(str).str.strip())
+        raw["buy"] = pd.to_numeric(raw["buy"], errors="coerce").fillna(0.0)
+        raw["sell"] = pd.to_numeric(raw["sell"], errors="coerce").fillna(0.0)
+        raw["warrant_id"] = warrant_id
+        raw["warrant_name"] = warrant_name_map.get(warrant_id, "")
+        frames.append(raw[["date", "broker", "warrant_id", "warrant_name", "buy", "sell"]])
+
+    if not frames:
+        return pd.DataFrame(columns=["date", "broker", "warrant_id", "warrant_name", "buy", "sell", "net"])
+
+    out = pd.concat(frames, ignore_index=True)
+    out = (
+        out.groupby(["date", "broker", "warrant_id", "warrant_name"], as_index=False)[["buy", "sell"]]
+        .sum()
+        .sort_values(["date", "broker", "warrant_id"])
+    )
+    out["net"] = out["buy"] - out["sell"]
+    return out
+
+
+def load_data(stock_id: str, days: int = 240) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str], list[str]]:
     """
     Returns:
       ohlcv_df: columns [date, open, high, low, close, volume]
@@ -64,14 +341,14 @@ def load_data(stock_id: str, days: int = 240) -> tuple[pd.DataFrame, pd.DataFram
       brokers: list of broker names
     """
     stock_id = str(stock_id).strip()
-    ohlc_path = Path("data/_derived/ohlc.parquet")
+    ohlc_path = resolve_data("_derived", "ohlc.parquet")
     if not ohlc_path.exists():
         raise FileNotFoundError("Missing data/_derived/ohlc.parquet. Please run Analysis_BsReport_v3.py first.")
 
     ohlcv = pd.read_parquet(ohlc_path, columns=["symbol", "date", "open", "high", "low", "close", "volume"])
     ohlcv = ohlcv[ohlcv["symbol"] == stock_id].copy()
     if ohlcv.empty:
-        return pd.DataFrame(), pd.DataFrame(), [], []
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), [], []
 
     ohlcv["date"] = pd.to_datetime(ohlcv["date"])
     for c in ["open", "high", "low", "close", "volume"]:
@@ -82,55 +359,58 @@ def load_data(stock_id: str, days: int = 240) -> tuple[pd.DataFrame, pd.DataFram
         ohlcv = ohlcv.tail(days)
 
     # Broker data
-    broker_path = None
-    for p in [Path(f"data/bs_report/parquet_twse/{stock_id}.parquet"), Path(f"data/bs_report/parquet_tpex/{stock_id}.parquet")]:
-        if p.exists():
-            broker_path = p
-            break
+    broker_path = _resolve_bs_parquet(stock_id)
 
     if broker_path is None:
-        return ohlcv, pd.DataFrame(), [], []
+        broker_df = pd.DataFrame(columns=["date", "broker", "buy", "sell", "buy_amt", "sell_amt", "net"])
+    else:
+        broker_raw = pd.read_parquet(broker_path, columns=["日期", "券商", "買進股數", "賣出股數", "價格"])
+        broker_raw = broker_raw.rename(columns={"日期": "date", "券商": "broker", "買進股數": "buy", "賣出股數": "sell", "價格": "price"})
+        broker_raw["date"] = pd.to_datetime(broker_raw["date"])
+        broker_raw["buy"] = pd.to_numeric(broker_raw["buy"], errors="coerce").fillna(0.0)
+        broker_raw["sell"] = pd.to_numeric(broker_raw["sell"], errors="coerce").fillna(0.0)
+        broker_raw["price"] = pd.to_numeric(broker_raw["price"], errors="coerce").fillna(0.0)
+        broker_raw["broker"] = broker_raw["broker"].astype(str).str.strip()
+        broker_raw = broker_raw[(broker_raw["broker"] != "") & (broker_raw["broker"] != "nan")]
+        broker_raw = broker_raw.dropna(subset=["broker", "date"])
 
-    broker_raw = pd.read_parquet(broker_path, columns=["日期", "券商", "買進股數", "賣出股數", "價格"])
-    broker_raw = broker_raw.rename(columns={"日期": "date", "券商": "broker", "買進股數": "buy", "賣出股數": "sell", "價格": "price"})
-    broker_raw["date"] = pd.to_datetime(broker_raw["date"])
-    broker_raw["buy"] = pd.to_numeric(broker_raw["buy"], errors="coerce").fillna(0.0)
-    broker_raw["sell"] = pd.to_numeric(broker_raw["sell"], errors="coerce").fillna(0.0)
-    broker_raw["price"] = pd.to_numeric(broker_raw["price"], errors="coerce").fillna(0.0)
-    broker_raw["broker"] = broker_raw["broker"].astype(str).str.strip()
-    broker_raw = broker_raw[(broker_raw["broker"] != "") & (broker_raw["broker"] != "nan")]
-    broker_raw = broker_raw.dropna(subset=["broker", "date"])
+        # Filter broker data to match OHLC range
+        min_date = ohlcv["date"].min()
+        max_date = ohlcv["date"].max()
+        broker_raw = broker_raw[(broker_raw["date"] >= min_date) & (broker_raw["date"] <= max_date)]
 
-    # Filter broker data to match OHLC range
-    min_date = ohlcv["date"].min()
-    max_date = ohlcv["date"].max()
-    broker_raw = broker_raw[(broker_raw["date"] >= min_date) & (broker_raw["date"] <= max_date)]
+        broker_raw["buy_amt"] = broker_raw["price"] * broker_raw["buy"]
+        broker_raw["sell_amt"] = broker_raw["price"] * broker_raw["sell"]
+        broker_df = (
+            broker_raw.groupby(["date", "broker"], as_index=False)[["buy", "sell", "buy_amt", "sell_amt"]]
+            .sum()
+        )
+        broker_df["net"] = broker_df["buy"] - broker_df["sell"]
 
-    broker_raw["buy_amt"] = broker_raw["price"] * broker_raw["buy"]
-    broker_raw["sell_amt"] = broker_raw["price"] * broker_raw["sell"]
-    broker_df = (
-        broker_raw.groupby(["date", "broker"], as_index=False)[["buy", "sell", "buy_amt", "sell_amt"]]
-        .sum()
-    )
-    broker_df["net"] = broker_df["buy"] - broker_df["sell"]
-
-    # Broker name mapping
-    broker_list_path = Path("data/broker_list.csv")
-    if broker_list_path.exists():
-        broker_map = pd.read_csv(broker_list_path, dtype=str)[["證券商代號", "證券商名稱"]].dropna()
-        broker_map = dict(zip(broker_map["證券商代號"].str.strip(), broker_map["證券商名稱"].str.strip()))
+        broker_map = load_broker_name_map()
         broker_df["broker"] = broker_df["broker"].astype(str).str.strip().map(broker_map).fillna(broker_df["broker"])
 
-    broker_df = (
-        broker_df.groupby(["date", "broker"], as_index=False)[["buy", "sell", "buy_amt", "sell_amt"]]
-        .sum()
-    )
-    broker_df["net"] = broker_df["buy"] - broker_df["sell"]
+        broker_df = (
+            broker_df.groupby(["date", "broker"], as_index=False)[["buy", "sell", "buy_amt", "sell_amt"]]
+            .sum()
+        )
+        broker_df["net"] = broker_df["buy"] - broker_df["sell"]
 
-    brokers = sorted(broker_df["broker"].dropna().unique().tolist())
+    all_key_events = load_key_branch_events()
+    key_events = all_key_events[all_key_events["underlying_stock_id"].astype(str) == stock_id].copy() if not all_key_events.empty else pd.DataFrame()
+    all_key_cases = load_key_branch_cases()
+    key_cases = all_key_cases[all_key_cases["symbol"].astype(str) == stock_id].copy() if not all_key_cases.empty else pd.DataFrame()
+    warrant_broker_df = load_warrant_broker_data(key_events, ohlcv["date"].min(), ohlcv["date"].max())
+
+    brokers = set(broker_df["broker"].dropna().unique().tolist())
+    if not warrant_broker_df.empty:
+        brokers.update(warrant_broker_df["broker"].dropna().unique().tolist())
+    if not key_cases.empty:
+        brokers.update(key_cases["broker_name"].dropna().astype(str).tolist())
+    brokers = sorted(b for b in brokers if b)
 
     # Events for this symbol
-    events_path = Path("data/_derived/scored.parquet")
+    events_path = resolve_data("_derived", "scored.parquet")
     if events_path.exists():
         ev = pd.read_parquet(events_path, columns=["symbol", "date", "is_event"])
         ev = ev[(ev["symbol"] == stock_id) & (ev["is_event"] == 1)].copy()
@@ -138,7 +418,10 @@ def load_data(stock_id: str, days: int = 240) -> tuple[pd.DataFrame, pd.DataFram
     else:
         event_dates = []
 
-    return ohlcv, broker_df, brokers, event_dates
+    if not key_events.empty:
+        event_dates = sorted(set(event_dates) | set(pd.to_datetime(key_events["date"]).dt.date.astype(str).unique().tolist()))
+
+    return ohlcv, broker_df, warrant_broker_df, key_events, key_cases, brokers, event_dates
 
 
 # -----------------------------
@@ -251,6 +534,8 @@ def filter_by_range(df: pd.DataFrame, start: pd.Timestamp | None, end: pd.Timest
 def build_figure(
     ohlcv: pd.DataFrame,
     broker_df: pd.DataFrame,
+    warrant_broker_df: pd.DataFrame,
+    key_events: pd.DataFrame,
     selected_broker: str,
     topn_buy_daily: pd.DataFrame,
     topn_sell_daily: pd.DataFrame,
@@ -265,13 +550,14 @@ def build_figure(
     bar_width_ms = BAR_WIDTH_MS
 
     fig = make_subplots(
-        rows=5,
+        rows=6,
         cols=1,
         shared_xaxes=True,
         vertical_spacing=0.03,
-        row_heights=[0.46, 0.14, 0.18, 0.11, 0.11],
+        row_heights=[0.40, 0.12, 0.16, 0.16, 0.09, 0.09],
         specs=[
             [{"type": "candlestick"}],
+            [{"type": "bar"}],
             [{"type": "bar"}],
             [{"type": "bar"}],
             [{"type": "bar"}],
@@ -339,7 +625,37 @@ def build_figure(
         col=1,
     )
 
-    if event_dates is not None and len(event_dates) > 0:
+    if key_events is not None and not key_events.empty:
+        ev_summary = (
+            key_events.assign(date=pd.to_datetime(key_events["date"], errors="coerce"))
+            .dropna(subset=["date"])
+            .groupby("date", as_index=False)
+            .agg(
+                anomaly_score=("anomaly_score", "max"),
+                event_type=("event_type", lambda s: ",".join(sorted(set(s.astype(str))))),
+                broker_name=("broker_name", lambda s: ",".join(sorted(set(s.astype(str)))[:3])),
+            )
+        )
+        ev = ohlcv.merge(ev_summary, on="date", how="inner")
+        if not ev.empty:
+            fig.add_trace(
+                go.Scatter(
+                    x=ev["date"],
+                    y=ev["close"],
+                    mode="markers",
+                    name="關鍵分點事件",
+                    customdata=ev[["broker_name", "event_type", "anomaly_score"]],
+                    hovertemplate=(
+                        "關鍵分點=%{customdata[0]}<br>"
+                        "類型=%{customdata[1]}<br>"
+                        "score=%{customdata[2]:.2f}<extra></extra>"
+                    ),
+                    marker=dict(color="#ffb000", size=13, symbol="star", line=dict(color="#7a3f00", width=1)),
+                ),
+                row=1,
+                col=1,
+            )
+    elif event_dates is not None and len(event_dates) > 0:
         ev = ohlcv[ohlcv["date"].isin(event_dates)].copy()
         if not ev.empty:
             fig.add_trace(
@@ -394,7 +710,43 @@ def build_figure(
         col=1,
     )
 
-    # Row 4: Top N buy brokers aggregated buy/sell
+    # Row 4: Selected broker warrant-side buy/sell across event-related warrants
+    if warrant_broker_df is not None and not warrant_broker_df.empty:
+        wd = (
+            warrant_broker_df[warrant_broker_df["broker"] == selected_broker]
+            .groupby("date", as_index=False)[["buy", "sell", "net"]]
+            .sum()
+            .sort_values("date")
+        )
+    else:
+        wd = pd.DataFrame(columns=["date", "buy", "sell", "net"])
+    if not wd.empty:
+        fig.add_trace(
+            go.Bar(
+                x=wd["date"],
+                y=wd["buy"],
+                name=f"{selected_broker} 權證買入",
+                marker_color="#b42318",
+                width=bar_width_ms,
+                showlegend=False,
+            ),
+            row=4,
+            col=1,
+        )
+        fig.add_trace(
+            go.Bar(
+                x=wd["date"],
+                y=-wd["sell"],
+                name=f"{selected_broker} 權證賣出",
+                marker_color="#027a48",
+                width=bar_width_ms,
+                showlegend=False,
+            ),
+            row=4,
+            col=1,
+        )
+
+    # Row 5: Top N buy brokers aggregated buy/sell
     if not topn_buy_daily.empty:
         fig.add_trace(
             go.Bar(
@@ -405,7 +757,7 @@ def build_figure(
                 width=bar_width_ms,
                 showlegend=False,
             ),
-            row=4,
+            row=5,
             col=1,
         )
         fig.add_trace(
@@ -417,11 +769,11 @@ def build_figure(
                 width=bar_width_ms,
                 showlegend=False,
             ),
-            row=4,
+            row=5,
             col=1,
         )
 
-    # Row 5: Top N sell brokers aggregated buy/sell
+    # Row 6: Top N sell brokers aggregated buy/sell
     if not topn_sell_daily.empty:
         fig.add_trace(
             go.Bar(
@@ -432,7 +784,7 @@ def build_figure(
                 width=bar_width_ms,
                 showlegend=False,
             ),
-            row=5,
+            row=6,
             col=1,
         )
         fig.add_trace(
@@ -444,7 +796,7 @@ def build_figure(
                 width=bar_width_ms,
                 showlegend=False,
             ),
-            row=5,
+            row=6,
             col=1,
         )
     fig.update_layout(
@@ -467,9 +819,10 @@ def build_figure(
 
     fig.update_yaxes(title_text="Price", row=1, col=1)
     fig.update_yaxes(title_text="Volume", row=2, col=1)
-    fig.update_yaxes(title_text="Selected Broker", row=3, col=1)
-    fig.update_yaxes(title_text="Top Buyers", row=4, col=1)
-    fig.update_yaxes(title_text="Top Sellers", row=5, col=1)
+    fig.update_yaxes(title_text="股票分點", row=3, col=1)
+    fig.update_yaxes(title_text="權證分點", row=4, col=1)
+    fig.update_yaxes(title_text="Top Buyers", row=5, col=1)
+    fig.update_yaxes(title_text="Top Sellers", row=6, col=1)
     return fig
 
 
@@ -517,7 +870,7 @@ def top10_tables(broker_view: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
     )
     agg["avg_buy"] = agg["buy_amt"] / agg["buy"].replace(0, pd.NA)
     agg["avg_sell"] = agg["sell_amt"] / agg["sell"].replace(0, pd.NA)
-    agg = agg[["broker", "buy", "sell", "net", "avg_buy", "avg_sell"]]
+    agg = agg[["broker", "buy", "sell", "net", "buy_amt", "sell_amt", "avg_buy", "avg_sell"]]
     agg = agg.sort_values("net", ascending=False)
 
     top_buy = agg.head(10).copy()
@@ -526,14 +879,15 @@ def top10_tables(broker_view: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
         [{
             "rank": "",
             "broker": "合計",
-            "buy": pd.NA,
-            "sell": pd.NA,
+            "buy": top_buy["buy"].sum(),
+            "sell": top_buy["sell"].sum(),
             "net": top_buy["net"].sum(),
-            "avg_buy": pd.NA,
-            "avg_sell": pd.NA,
+            "avg_buy": top_buy["buy_amt"].sum() / top_buy["buy"].sum() if top_buy["buy"].sum() else pd.NA,
+            "avg_sell": top_buy["sell_amt"].sum() / top_buy["sell"].sum() if top_buy["sell"].sum() else pd.NA,
         }]
     )
     top_buy = pd.concat([top_buy, buy_total], ignore_index=True)
+    top_buy = top_buy[["rank", "broker", "buy", "sell", "net", "avg_buy", "avg_sell"]]
 
     top_sell = agg.sort_values("net", ascending=True).head(10).copy()
     top_sell.insert(0, "rank", range(1, len(top_sell) + 1))
@@ -541,14 +895,15 @@ def top10_tables(broker_view: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
         [{
             "rank": "",
             "broker": "合計",
-            "buy": pd.NA,
-            "sell": pd.NA,
+            "buy": top_sell["buy"].sum(),
+            "sell": top_sell["sell"].sum(),
             "net": top_sell["net"].sum(),
-            "avg_buy": pd.NA,
-            "avg_sell": pd.NA,
+            "avg_buy": top_sell["buy_amt"].sum() / top_sell["buy"].sum() if top_sell["buy"].sum() else pd.NA,
+            "avg_sell": top_sell["sell_amt"].sum() / top_sell["sell"].sum() if top_sell["sell"].sum() else pd.NA,
         }]
     )
     top_sell = pd.concat([top_sell, sell_total], ignore_index=True)
+    top_sell = top_sell[["rank", "broker", "buy", "sell", "net", "avg_buy", "avg_sell"]]
 
     return top_buy, top_sell
 
@@ -578,11 +933,71 @@ def topn_daily_sum(broker_view: pd.DataFrame, n: int, side: str) -> pd.DataFrame
     return daily
 
 
+def build_key_relation_panel(key_cases: pd.DataFrame, key_events: pd.DataFrame, warrant_broker_view: pd.DataFrame, selected_broker: str) -> html.Div:
+    if key_cases.empty and key_events.empty:
+        return html.Div("這檔股票目前沒有關鍵分點事件資料。", style={"opacity": 0.7, "fontSize": "13px"})
+
+    selected_events = key_events[key_events["broker_name"] == selected_broker].copy() if not key_events.empty else pd.DataFrame()
+    selected_warrant = warrant_broker_view[warrant_broker_view["broker"] == selected_broker].copy() if not warrant_broker_view.empty else pd.DataFrame()
+    event_count = len(selected_events)
+    warrant_net = selected_warrant["net"].sum() if not selected_warrant.empty else 0
+    warrant_ids = []
+    if not selected_events.empty and "warrant_window_ids" in selected_events.columns:
+        for value in selected_events["warrant_window_ids"].dropna():
+            warrant_ids.extend(_split_tokens(value))
+    warrant_ids = sorted(set(warrant_ids))
+
+    top_case = key_cases.iloc[0] if not key_cases.empty else None
+    top_case_label = "—"
+    if top_case is not None:
+        top_case_label = (
+            f"{top_case.get('broker_name', '')} / {top_case.get('top_event_type', '')} / "
+            f"score {_fmt_score(top_case.get('max_score'))}"
+        )
+
+    items = [
+        html.Div([html.Span("本股最高分 case：", style={"opacity": 0.7}), html.Span(top_case_label)]),
+        html.Div([html.Span("目前選定分點：", style={"opacity": 0.7}), html.Span(selected_broker or "—")]),
+        html.Div([html.Span("區間內選定分點事件數：", style={"opacity": 0.7}), html.Span(f"{event_count}")]),
+        html.Div([html.Span("區間內選定分點權證淨買：", style={"opacity": 0.7}), html.Span(_fmt_int(warrant_net))]),
+        html.Div([html.Span("相關權證：", style={"opacity": 0.7}), html.Span(", ".join(warrant_ids[:8]) if warrant_ids else "—")]),
+    ]
+    return html.Div(style={"display": "grid", "gap": "6px", "fontSize": "13px"}, children=items)
+
+
+KEY_CASE_COLUMNS = [
+    {"name": "股票", "id": "symbol"},
+    {"name": "分點", "id": "broker_name"},
+    {"name": "開始", "id": "case_start"},
+    {"name": "結束", "id": "case_end"},
+    {"name": "事件", "id": "n_events"},
+    {"name": "類型", "id": "top_event_type"},
+    {"name": "Score", "id": "max_score"},
+    {"name": "股票買超", "id": "stock_window_net_buy_max"},
+    {"name": "股票占比", "id": "stock_window_branch_share_max"},
+    {"name": "權證買超", "id": "warrant_window_net_buy_max"},
+    {"name": "權證占比", "id": "warrant_window_branch_share_max"},
+    {"name": "權證", "id": "warrant_window_ids_top"},
+]
+
+KEY_EVENT_COLUMNS = [
+    {"name": "日期", "id": "date"},
+    {"name": "分點", "id": "broker_name"},
+    {"name": "類型", "id": "event_type"},
+    {"name": "Score", "id": "anomaly_score"},
+    {"name": "股票買超", "id": "stock_window_net_buy"},
+    {"name": "股票占比", "id": "stock_window_branch_share"},
+    {"name": "權證買超", "id": "warrant_window_net_buy"},
+    {"name": "權證占比", "id": "warrant_window_branch_share"},
+    {"name": "權證", "id": "warrant_window_ids"},
+]
+
+
 # -----------------------------
 # Dash App
 # -----------------------------
 app = Dash(__name__)
-app.title = "籌碼K線 MVP"
+app.title = "籌碼K線 / 關鍵分點"
 
 app.layout = html.Div(
     style={"fontFamily": "system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial", "padding": "12px"},
@@ -595,7 +1010,7 @@ app.layout = html.Div(
                 dcc.Input(
                     id="stock-input",
                     type="text",
-                    value="2330",
+                    value=default_stock_id(),
                     debounce=True,
                     style={"width": "110px", "padding": "6px 8px"},
                 ),
@@ -637,10 +1052,33 @@ app.layout = html.Div(
             ],
         ),
 
-        # Main split layout
+        html.Div(
+            style={"border": "1px solid #dbeafe", "borderRadius": "10px", "padding": "10px", "marginBottom": "12px", "background": "#f8fbff"},
+            children=[
                 html.Div(
-                    style={"display": "grid", "gridTemplateColumns": "67% 33%", "gap": "12px"},
+                    style={"display": "flex", "justifyContent": "space-between", "gap": "12px", "alignItems": "baseline", "marginBottom": "8px"},
                     children=[
+                        html.Div("近兩月關鍵分點總覽（點股票列可載入）", style={"fontWeight": 700}),
+                        html.Div(f"資料來源：{key_branch_source_label()}", style={"fontSize": "12px", "opacity": 0.65}),
+                    ],
+                ),
+                dash_table.DataTable(
+                    id="key-case-overview-table",
+                    columns=KEY_CASE_COLUMNS,
+                    data=format_case_table(load_key_branch_cases(), limit=50),
+                    style_table={"overflowX": "auto", "maxHeight": "260px", "overflowY": "auto"},
+                    style_cell={"fontSize": "12px", "padding": "6px", "whiteSpace": "nowrap"},
+                    style_header={"fontWeight": 700, "background": "#eaf2ff"},
+                    page_action="none",
+                    fixed_rows={"headers": True},
+                ),
+            ],
+        ),
+
+        # Main split layout
+        html.Div(
+            style={"display": "grid", "gridTemplateColumns": "67% 33%", "gap": "12px"},
+            children=[
                 # Left: chart
                 html.Div(
                     style={"border": "1px solid #e5e7eb", "borderRadius": "10px", "padding": "8px"},
@@ -664,6 +1102,43 @@ app.layout = html.Div(
                             children=[
                                 html.Div("股票重點資訊", style={"fontWeight": 700, "marginBottom": "8px"}),
                                 html.Div(id="summary-box"),
+                            ],
+                        ),
+                        html.Div(
+                            style={"border": "1px solid #fed7aa", "borderRadius": "10px", "padding": "10px", "background": "#fffaf5"},
+                            children=[
+                                html.Div("股票 / 權證關係", style={"fontWeight": 700, "marginBottom": "8px"}),
+                                html.Div(id="key-relation-box"),
+                            ],
+                        ),
+                        html.Div(
+                            style={"border": "1px solid #e5e7eb", "borderRadius": "10px", "padding": "10px"},
+                            children=[
+                                html.Div("本股關鍵分點 Case", style={"fontWeight": 700, "marginBottom": "8px"}),
+                                dash_table.DataTable(
+                                    id="key-case-table",
+                                    columns=KEY_CASE_COLUMNS[1:],
+                                    data=[],
+                                    style_table={"overflowX": "auto", "maxHeight": "220px", "overflowY": "auto"},
+                                    style_cell={"fontSize": "12px", "padding": "6px", "whiteSpace": "nowrap"},
+                                    style_header={"fontWeight": 700},
+                                    page_action="none",
+                                ),
+                            ],
+                        ),
+                        html.Div(
+                            style={"border": "1px solid #e5e7eb", "borderRadius": "10px", "padding": "10px"},
+                            children=[
+                                html.Div("本股關鍵分點事件", style={"fontWeight": 700, "marginBottom": "8px"}),
+                                dash_table.DataTable(
+                                    id="key-event-table",
+                                    columns=KEY_EVENT_COLUMNS,
+                                    data=[],
+                                    style_table={"overflowX": "auto", "maxHeight": "260px", "overflowY": "auto"},
+                                    style_cell={"fontSize": "12px", "padding": "6px", "whiteSpace": "nowrap"},
+                                    style_header={"fontWeight": 700},
+                                    page_action="none",
+                                ),
                             ],
                         ),
                         html.Div(
@@ -718,6 +1193,9 @@ app.layout = html.Div(
         # Store current loaded data in browser memory
         dcc.Store(id="store-ohlcv"),
         dcc.Store(id="store-broker"),
+        dcc.Store(id="store-warrant-broker"),
+        dcc.Store(id="store-key-events"),
+        dcc.Store(id="store-key-cases"),
         dcc.Store(id="store-brokers"),
         dcc.Store(id="store-events"),
     ],
@@ -727,6 +1205,9 @@ app.layout = html.Div(
 @app.callback(
     Output("store-ohlcv", "data"),
     Output("store-broker", "data"),
+    Output("store-warrant-broker", "data"),
+    Output("store-key-events", "data"),
+    Output("store-key-cases", "data"),
     Output("store-brokers", "data"),
     Output("store-events", "data"),
     Output("broker-dropdown", "options"),
@@ -756,13 +1237,20 @@ def on_stock_change(stock_id: str):
             no_update,
             no_update,
             no_update,
+            no_update,
+            no_update,
+            no_update,
             "請輸入股票代號",
         )
 
-    ohlcv, broker_df, brokers, event_dates = load_data(stock_id)
+    ohlcv, broker_df, warrant_broker_df, key_events, key_cases, brokers, event_dates = load_data(stock_id)
 
     options = [{"label": b, "value": b} for b in brokers]
-    default_broker = brokers[0] if brokers else None
+    if not key_cases.empty:
+        preferred = str(key_cases.iloc[0].get("broker_name", "") or "")
+        default_broker = preferred if preferred in brokers else (brokers[0] if brokers else None)
+    else:
+        default_broker = brokers[0] if brokers else None
 
     if not ohlcv.empty:
         min_date = ohlcv["date"].min().date().isoformat()
@@ -778,10 +1266,16 @@ def on_stock_change(stock_id: str):
         start_date = None
         end_date = None
 
-    hint = f"資料筆數：K線 {len(ohlcv)} 天、券商交易 {len(broker_df):,} 筆、事件 {len(event_dates)} 筆"
+    hint = (
+        f"資料筆數：K線 {len(ohlcv)} 天、股票分點 {len(broker_df):,} 筆、"
+        f"權證分點 {len(warrant_broker_df):,} 筆、關鍵事件 {len(key_events):,} 筆"
+    )
     return (
         ohlcv.to_dict("records"),
         broker_df.to_dict("records"),
+        warrant_broker_df.to_dict("records"),
+        key_events.to_dict("records"),
+        key_cases.to_dict("records"),
         brokers,
         event_dates,
         options,
@@ -799,10 +1293,16 @@ def on_stock_change(stock_id: str):
 @app.callback(
     Output("main-chart", "figure"),
     Output("summary-box", "children"),
+    Output("key-relation-box", "children"),
+    Output("key-case-table", "data"),
+    Output("key-event-table", "data"),
     Output("top-buy-table", "data"),
     Output("top-sell-table", "data"),
     Input("store-ohlcv", "data"),
     Input("store-broker", "data"),
+    Input("store-warrant-broker", "data"),
+    Input("store-key-events", "data"),
+    Input("store-key-cases", "data"),
     Input("store-events", "data"),
     Input("broker-dropdown", "value"),
     Input("date-start", "date"),
@@ -811,16 +1311,40 @@ def on_stock_change(stock_id: str):
     Input("main-chart", "relayoutData"),
     State("stock-input", "value"),
 )
-def render_all(ohlcv_data, broker_data, event_dates, selected_broker, start_date, end_date, topn_value, relayout_data, stock_id):
-    if not ohlcv_data or not broker_data or not selected_broker:
+def render_all(
+    ohlcv_data,
+    broker_data,
+    warrant_broker_data,
+    key_events_data,
+    key_cases_data,
+    event_dates,
+    selected_broker,
+    start_date,
+    end_date,
+    topn_value,
+    relayout_data,
+    stock_id,
+):
+    if not ohlcv_data or not selected_broker:
         fig = go.Figure()
         fig.update_layout(height=1040, margin=dict(l=10, r=10, t=30, b=10))
-        return fig, "—", [], []
+        return fig, "—", "—", [], [], [], []
 
     ohlcv = pd.DataFrame(ohlcv_data)
-    broker_df = pd.DataFrame(broker_data)
+    broker_df = pd.DataFrame(broker_data or [], columns=["date", "broker", "buy", "sell", "buy_amt", "sell_amt", "net"])
+    warrant_broker_df = pd.DataFrame(warrant_broker_data or [], columns=["date", "broker", "warrant_id", "warrant_name", "buy", "sell", "net"])
+    key_events = pd.DataFrame(key_events_data or [])
+    key_cases = pd.DataFrame(key_cases_data or [])
     ohlcv["date"] = pd.to_datetime(ohlcv["date"])
-    broker_df["date"] = pd.to_datetime(broker_df["date"])
+    if not broker_df.empty:
+        broker_df["date"] = pd.to_datetime(broker_df["date"])
+    if not warrant_broker_df.empty:
+        warrant_broker_df["date"] = pd.to_datetime(warrant_broker_df["date"])
+    if not key_events.empty:
+        key_events["date"] = pd.to_datetime(key_events["date"])
+    for col in ("case_start", "case_end", "top_date"):
+        if not key_cases.empty and col in key_cases.columns:
+            key_cases[col] = pd.to_datetime(key_cases[col], errors="coerce")
     event_dt = pd.to_datetime(event_dates) if event_dates else []
 
     # Filter by date picker range first
@@ -828,13 +1352,21 @@ def render_all(ohlcv_data, broker_data, event_dates, selected_broker, start_date
     end_dt = pd.to_datetime(end_date) if end_date else None
     ohlcv_base = filter_by_range(ohlcv, start_dt, end_dt, "date")
     broker_base = filter_by_range(broker_df, start_dt, end_dt, "date")
+    warrant_base = filter_by_range(warrant_broker_df, start_dt, end_dt, "date")
+    key_events_base = filter_by_range(key_events, start_dt, end_dt, "date")
     ohlcv_base = ohlcv_base.copy()
     broker_base = broker_base.copy()
+    warrant_base = warrant_base.copy()
+    key_events_base = key_events_base.copy()
 
     # Keep broker dates only where OHLC exists
     if not ohlcv_base.empty and not broker_base.empty:
         valid_dates = set(ohlcv_base["date"])
         broker_base = broker_base[broker_base["date"].isin(valid_dates)]
+        if not warrant_base.empty:
+            warrant_base = warrant_base[warrant_base["date"].isin(valid_dates)]
+        if not key_events_base.empty:
+            key_events_base = key_events_base[key_events_base["date"].isin(valid_dates)]
 
     # Further filter by current x-range (zoom/pan)
     start, end = parse_xrange_with_dates(relayout_data, ohlcv_base["date"])
@@ -847,6 +1379,8 @@ def render_all(ohlcv_data, broker_data, event_dates, selected_broker, start_date
             end = base_max
     ohlcv_view = filter_by_range(ohlcv_base, start, end, "date")
     broker_view = filter_by_range(broker_base, start, end, "date")
+    warrant_view = filter_by_range(warrant_base, start, end, "date")
+    key_events_view = filter_by_range(key_events_base, start, end, "date")
 
     topn_buy_daily = topn_daily_sum(broker_view, topn_value, "buy")
     topn_sell_daily = topn_daily_sum(broker_view, topn_value, "sell")
@@ -856,6 +1390,8 @@ def render_all(ohlcv_data, broker_data, event_dates, selected_broker, start_date
     fig = build_figure(
         ohlcv_base,
         broker_base,
+        warrant_base,
+        key_events_base,
         selected_broker,
         topn_buy_daily,
         topn_sell_daily,
@@ -893,18 +1429,29 @@ def render_all(ohlcv_data, broker_data, event_dates, selected_broker, start_date
     )
 
     top_buy, top_sell = top10_tables(broker_view)
-    return fig, summary_box, top_buy.to_dict("records"), top_sell.to_dict("records")
+    relation_box = build_key_relation_panel(key_cases, key_events_view, warrant_view, selected_broker)
+    return (
+        fig,
+        summary_box,
+        relation_box,
+        format_case_table(key_cases, limit=30),
+        format_event_table(key_events_view, limit=80),
+        top_buy.to_dict("records"),
+        top_sell.to_dict("records"),
+    )
 
 
 @app.callback(
     Output("broker-dropdown", "value", allow_duplicate=True),
     Input("top-buy-table", "active_cell"),
     Input("top-sell-table", "active_cell"),
+    Input("key-case-table", "active_cell"),
     State("top-buy-table", "data"),
     State("top-sell-table", "data"),
+    State("key-case-table", "data"),
     prevent_initial_call=True,
 )
-def on_table_click(buy_cell, sell_cell, buy_data, sell_data):
+def on_table_click(buy_cell, sell_cell, case_cell, buy_data, sell_data, case_data):
     if not callback_context.triggered:
         return no_update
 
@@ -912,18 +1459,42 @@ def on_table_click(buy_cell, sell_cell, buy_data, sell_data):
     if trigger == "top-buy-table":
         cell = buy_cell
         data = buy_data or []
-    else:
+        broker_col = "broker"
+    elif trigger == "top-sell-table":
         cell = sell_cell
         data = sell_data or []
+        broker_col = "broker"
+    else:
+        cell = case_cell
+        data = case_data or []
+        broker_col = "broker_name"
 
-    if not cell or cell.get("column_id") != "broker":
+    if not cell:
         return no_update
 
     row = cell.get("row")
     if row is None or row >= len(data):
         return no_update
 
-    return data[row].get("broker", no_update)
+    broker = data[row].get(broker_col)
+    if not broker or broker == "合計":
+        return no_update
+    return broker
+
+
+@app.callback(
+    Output("stock-input", "value", allow_duplicate=True),
+    Input("key-case-overview-table", "active_cell"),
+    State("key-case-overview-table", "data"),
+    prevent_initial_call=True,
+)
+def on_key_case_overview_click(active_cell, data):
+    if not active_cell or not data:
+        return no_update
+    row = active_cell.get("row")
+    if row is None or row >= len(data):
+        return no_update
+    return str(data[row].get("symbol", "")).strip() or no_update
 
 
 @app.callback(
