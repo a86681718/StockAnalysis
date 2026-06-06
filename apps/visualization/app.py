@@ -533,7 +533,7 @@ def parse_xrange_with_dates(
 
 
 def filter_by_range(df: pd.DataFrame, start: pd.Timestamp | None, end: pd.Timestamp | None, date_col: str = "date") -> pd.DataFrame:
-    if start is None or end is None:
+    if start is None or end is None or df.empty or date_col not in df.columns:
         return df
     return df[(df[date_col] >= start) & (df[date_col] <= end)]
 
