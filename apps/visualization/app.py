@@ -68,9 +68,14 @@ def load_broker_name_map() -> dict[str, str]:
     mapping: dict[str, str] = {}
     if broker_list_path.exists():
         broker_map = pd.read_csv(broker_list_path, dtype=str, encoding="utf-8-sig")[["證券商代號", "證券商名稱"]].dropna()
-        mapping = dict(zip(broker_map["證券商代號"].str.strip(), broker_map["證券商名稱"].str.strip()))
+        broker_map["證券商代號"] = broker_map["證券商代號"].map(normalize_broker_code)
+        mapping = dict(zip(broker_map["證券商代號"], broker_map["證券商名稱"].str.strip()))
     _BROKER_NAME_MAP = mapping
     return mapping
+
+
+def normalize_broker_code(value: object) -> str:
+    return str(value or "").strip().upper()
 
 
 def load_warrant_name_map() -> dict[str, str]:
@@ -313,7 +318,8 @@ def load_warrant_broker_data(key_events: pd.DataFrame, min_date: pd.Timestamp | 
             raw = raw[raw["date"] <= max_date]
         if raw.empty:
             continue
-        raw["broker"] = raw["broker"].astype(str).str.strip().map(broker_map).fillna(raw["broker"].astype(str).str.strip())
+        raw_broker = raw["broker"].astype(str).str.strip()
+        raw["broker"] = raw_broker.map(normalize_broker_code).map(broker_map).fillna(raw_broker)
         raw["buy"] = pd.to_numeric(raw["buy"], errors="coerce").fillna(0.0)
         raw["sell"] = pd.to_numeric(raw["sell"], errors="coerce").fillna(0.0)
         raw["warrant_id"] = warrant_id
@@ -388,7 +394,8 @@ def load_data(stock_id: str, days: int = 240) -> tuple[pd.DataFrame, pd.DataFram
         broker_df["net"] = broker_df["buy"] - broker_df["sell"]
 
         broker_map = load_broker_name_map()
-        broker_df["broker"] = broker_df["broker"].astype(str).str.strip().map(broker_map).fillna(broker_df["broker"])
+        broker_code = broker_df["broker"].astype(str).str.strip().map(normalize_broker_code)
+        broker_df["broker"] = broker_code.map(broker_map).fillna(broker_df["broker"])
 
         broker_df = (
             broker_df.groupby(["date", "broker"], as_index=False)[["buy", "sell", "buy_amt", "sell_amt"]]
@@ -1196,6 +1203,7 @@ app.layout = html.Div(
         dcc.Store(id="store-warrant-broker"),
         dcc.Store(id="store-key-events"),
         dcc.Store(id="store-key-cases"),
+        dcc.Store(id="store-pending-broker"),
         dcc.Store(id="store-brokers"),
         dcc.Store(id="store-events"),
     ],
@@ -1219,9 +1227,11 @@ app.layout = html.Div(
     Output("date-end", "min_date_allowed"),
     Output("date-end", "max_date_allowed"),
     Output("hint", "children"),
+    Output("store-pending-broker", "data"),
     Input("stock-input", "value"),
+    State("store-pending-broker", "data"),
 )
-def on_stock_change(stock_id: str):
+def on_stock_change(stock_id: str, pending_broker: str | None):
     stock_id = (stock_id or "").strip()
     if not stock_id:
         return (
@@ -1241,12 +1251,16 @@ def on_stock_change(stock_id: str):
             no_update,
             no_update,
             "請輸入股票代號",
+            None,
         )
 
     ohlcv, broker_df, warrant_broker_df, key_events, key_cases, brokers, event_dates = load_data(stock_id)
 
     options = [{"label": b, "value": b} for b in brokers]
-    if not key_cases.empty:
+    pending_broker = str(pending_broker or "").strip()
+    if pending_broker and pending_broker in brokers:
+        default_broker = pending_broker
+    elif not key_cases.empty:
         preferred = str(key_cases.iloc[0].get("broker_name", "") or "")
         default_broker = preferred if preferred in brokers else (brokers[0] if brokers else None)
     else:
@@ -1287,6 +1301,7 @@ def on_stock_change(stock_id: str):
         min_date,
         max_date,
         hint,
+        None,
     )
 
 
@@ -1484,17 +1499,20 @@ def on_table_click(buy_cell, sell_cell, case_cell, buy_data, sell_data, case_dat
 
 @app.callback(
     Output("stock-input", "value", allow_duplicate=True),
+    Output("store-pending-broker", "data", allow_duplicate=True),
     Input("key-case-overview-table", "active_cell"),
     State("key-case-overview-table", "data"),
     prevent_initial_call=True,
 )
 def on_key_case_overview_click(active_cell, data):
     if not active_cell or not data:
-        return no_update
+        return no_update, no_update
     row = active_cell.get("row")
     if row is None or row >= len(data):
-        return no_update
-    return str(data[row].get("symbol", "")).strip() or no_update
+        return no_update, no_update
+    symbol = str(data[row].get("symbol", "")).strip()
+    broker = str(data[row].get("broker_name", "")).strip()
+    return symbol or no_update, broker or None
 
 
 @app.callback(
