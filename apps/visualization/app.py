@@ -549,6 +549,18 @@ def filter_by_range(df: pd.DataFrame, start: pd.Timestamp | None, end: pd.Timest
     return df[(df[date_col] >= start) & (df[date_col] <= end)]
 
 
+def add_bollinger_bands(ohlcv: pd.DataFrame, window: int = 20) -> pd.DataFrame:
+    if ohlcv.empty:
+        return ohlcv
+    out = ohlcv.copy()
+    bb_mid = out["close"].rolling(window=window, min_periods=window).mean()
+    bb_std = out["close"].rolling(window=window, min_periods=window).std()
+    out["bb_upper"] = bb_mid + 2 * bb_std
+    out["bb_mid"] = bb_mid
+    out["bb_lower"] = bb_mid - 2 * bb_std
+    return out
+
+
 def build_figure(
     ohlcv: pd.DataFrame,
     broker_df: pd.DataFrame,
@@ -561,11 +573,9 @@ def build_figure(
     event_dates: list[pd.Timestamp],
     show_key_branch: bool,
 ) -> go.Figure:
-    bb_window = 20
-    bb_mid = ohlcv["close"].rolling(window=bb_window, min_periods=bb_window).mean()
-    bb_std = ohlcv["close"].rolling(window=bb_window, min_periods=bb_window).std()
-    bb_upper = bb_mid + 2 * bb_std
-    bb_lower = bb_mid - 2 * bb_std
+    bb_upper = ohlcv["bb_upper"] if "bb_upper" in ohlcv.columns else pd.Series(index=ohlcv.index, dtype=float)
+    bb_mid = ohlcv["bb_mid"] if "bb_mid" in ohlcv.columns else pd.Series(index=ohlcv.index, dtype=float)
+    bb_lower = ohlcv["bb_lower"] if "bb_lower" in ohlcv.columns else pd.Series(index=ohlcv.index, dtype=float)
     bar_width_ms = BAR_WIDTH_MS
 
     row_count = 6 if show_key_branch else 5
@@ -1415,6 +1425,7 @@ def render_all(
         if not key_cases.empty and col in key_cases.columns:
             key_cases[col] = pd.to_datetime(key_cases[col], errors="coerce")
     event_dt = pd.to_datetime(event_dates) if event_dates else []
+    ohlcv = add_bollinger_bands(ohlcv)
 
     # Filter by date picker range first
     start_dt = pd.to_datetime(start_date) if start_date else None
