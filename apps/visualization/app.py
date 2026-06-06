@@ -236,10 +236,11 @@ def key_branch_source_label() -> str:
     return str(directory)
 
 
+def key_branch_enabled(value: object) -> bool:
+    return isinstance(value, list) and "enabled" in value
+
+
 def default_stock_id() -> str:
-    cases = load_key_branch_cases()
-    if not cases.empty and "symbol" in cases.columns:
-        return str(cases.iloc[0]["symbol"])
     return "2330"
 
 
@@ -339,7 +340,11 @@ def load_warrant_broker_data(key_events: pd.DataFrame, min_date: pd.Timestamp | 
     return out
 
 
-def load_data(stock_id: str, days: int = 240) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str], list[str]]:
+def load_data(
+    stock_id: str,
+    days: int = 240,
+    include_key_branch: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str], list[str]]:
     """
     Returns:
       ohlcv_df: columns [date, open, high, low, close, volume]
@@ -403,17 +408,23 @@ def load_data(stock_id: str, days: int = 240) -> tuple[pd.DataFrame, pd.DataFram
         )
         broker_df["net"] = broker_df["buy"] - broker_df["sell"]
 
-    all_key_events = load_key_branch_events()
-    key_events = all_key_events[all_key_events["underlying_stock_id"].astype(str) == stock_id].copy() if not all_key_events.empty else pd.DataFrame()
-    all_key_cases = load_key_branch_cases()
-    key_cases = all_key_cases[all_key_cases["symbol"].astype(str) == stock_id].copy() if not all_key_cases.empty else pd.DataFrame()
-    warrant_broker_df = load_warrant_broker_data(key_events, ohlcv["date"].min(), ohlcv["date"].max())
-
     brokers = set(broker_df["broker"].dropna().unique().tolist())
-    if not warrant_broker_df.empty:
-        brokers.update(warrant_broker_df["broker"].dropna().unique().tolist())
-    if not key_cases.empty:
-        brokers.update(key_cases["broker_name"].dropna().astype(str).tolist())
+
+    if include_key_branch:
+        all_key_events = load_key_branch_events()
+        key_events = all_key_events[all_key_events["underlying_stock_id"].astype(str) == stock_id].copy() if not all_key_events.empty else pd.DataFrame()
+        all_key_cases = load_key_branch_cases()
+        key_cases = all_key_cases[all_key_cases["symbol"].astype(str) == stock_id].copy() if not all_key_cases.empty else pd.DataFrame()
+        warrant_broker_df = load_warrant_broker_data(key_events, ohlcv["date"].min(), ohlcv["date"].max())
+        if not warrant_broker_df.empty:
+            brokers.update(warrant_broker_df["broker"].dropna().unique().tolist())
+        if not key_cases.empty:
+            brokers.update(key_cases["broker_name"].dropna().astype(str).tolist())
+    else:
+        warrant_broker_df = pd.DataFrame(columns=["date", "broker", "warrant_id", "warrant_name", "buy", "sell", "net"])
+        key_events = pd.DataFrame()
+        key_cases = pd.DataFrame()
+
     brokers = sorted(b for b in brokers if b)
 
     # Events for this symbol
@@ -548,6 +559,7 @@ def build_figure(
     topn_sell_daily: pd.DataFrame,
     topn_label: str,
     event_dates: list[pd.Timestamp],
+    show_key_branch: bool,
 ) -> go.Figure:
     bb_window = 20
     bb_mid = ohlcv["close"].rolling(window=bb_window, min_periods=bb_window).mean()
@@ -556,20 +568,17 @@ def build_figure(
     bb_lower = bb_mid - 2 * bb_std
     bar_width_ms = BAR_WIDTH_MS
 
+    row_count = 6 if show_key_branch else 5
+    row_heights = [0.40, 0.12, 0.16, 0.16, 0.08, 0.08] if show_key_branch else [0.44, 0.14, 0.18, 0.12, 0.12]
+    specs = [[{"type": "candlestick"}]] + [[{"type": "bar"}] for _ in range(row_count - 1)]
+
     fig = make_subplots(
-        rows=6,
+        rows=row_count,
         cols=1,
         shared_xaxes=True,
         vertical_spacing=0.03,
-        row_heights=[0.40, 0.12, 0.16, 0.16, 0.09, 0.09],
-        specs=[
-            [{"type": "candlestick"}],
-            [{"type": "bar"}],
-            [{"type": "bar"}],
-            [{"type": "bar"}],
-            [{"type": "bar"}],
-            [{"type": "bar"}],
-        ],
+        row_heights=row_heights,
+        specs=specs,
     )
 
     # Row 1: Candlestick
@@ -632,7 +641,7 @@ def build_figure(
         col=1,
     )
 
-    if key_events is not None and not key_events.empty:
+    if show_key_branch and key_events is not None and not key_events.empty:
         ev_summary = (
             key_events.assign(date=pd.to_datetime(key_events["date"], errors="coerce"))
             .dropna(subset=["date"])
@@ -717,17 +726,26 @@ def build_figure(
         col=1,
     )
 
+    top_buy_row = 5
+    top_sell_row = 6
+
     # Row 4: Selected broker warrant-side buy/sell across event-related warrants
-    if warrant_broker_df is not None and not warrant_broker_df.empty:
-        wd = (
-            warrant_broker_df[warrant_broker_df["broker"] == selected_broker]
-            .groupby("date", as_index=False)[["buy", "sell", "net"]]
-            .sum()
-            .sort_values("date")
-        )
+    if show_key_branch:
+        if warrant_broker_df is not None and not warrant_broker_df.empty:
+            wd = (
+                warrant_broker_df[warrant_broker_df["broker"] == selected_broker]
+                .groupby("date", as_index=False)[["buy", "sell", "net"]]
+                .sum()
+                .sort_values("date")
+            )
+        else:
+            wd = pd.DataFrame(columns=["date", "buy", "sell", "net"])
     else:
         wd = pd.DataFrame(columns=["date", "buy", "sell", "net"])
-    if not wd.empty:
+        top_buy_row = 4
+        top_sell_row = 5
+
+    if show_key_branch and not wd.empty:
         fig.add_trace(
             go.Bar(
                 x=wd["date"],
@@ -753,7 +771,7 @@ def build_figure(
             col=1,
         )
 
-    # Row 5: Top N buy brokers aggregated buy/sell
+    # Top N buy brokers aggregated buy/sell
     if not topn_buy_daily.empty:
         fig.add_trace(
             go.Bar(
@@ -764,7 +782,7 @@ def build_figure(
                 width=bar_width_ms,
                 showlegend=False,
             ),
-            row=5,
+            row=top_buy_row,
             col=1,
         )
         fig.add_trace(
@@ -776,11 +794,11 @@ def build_figure(
                 width=bar_width_ms,
                 showlegend=False,
             ),
-            row=5,
+            row=top_buy_row,
             col=1,
         )
 
-    # Row 6: Top N sell brokers aggregated buy/sell
+    # Top N sell brokers aggregated buy/sell
     if not topn_sell_daily.empty:
         fig.add_trace(
             go.Bar(
@@ -791,7 +809,7 @@ def build_figure(
                 width=bar_width_ms,
                 showlegend=False,
             ),
-            row=6,
+            row=top_sell_row,
             col=1,
         )
         fig.add_trace(
@@ -803,7 +821,7 @@ def build_figure(
                 width=bar_width_ms,
                 showlegend=False,
             ),
-            row=6,
+            row=top_sell_row,
             col=1,
         )
     fig.update_layout(
@@ -827,9 +845,10 @@ def build_figure(
     fig.update_yaxes(title_text="Price", row=1, col=1)
     fig.update_yaxes(title_text="Volume", row=2, col=1)
     fig.update_yaxes(title_text="股票分點", row=3, col=1)
-    fig.update_yaxes(title_text="權證分點", row=4, col=1)
-    fig.update_yaxes(title_text="Top Buyers", row=5, col=1)
-    fig.update_yaxes(title_text="Top Sellers", row=6, col=1)
+    if show_key_branch:
+        fig.update_yaxes(title_text="權證分點", row=4, col=1)
+    fig.update_yaxes(title_text="Top Buyers", row=top_buy_row, col=1)
+    fig.update_yaxes(title_text="Top Sellers", row=top_sell_row, col=1)
     return fig
 
 
@@ -1004,7 +1023,7 @@ KEY_EVENT_COLUMNS = [
 # Dash App
 # -----------------------------
 app = Dash(__name__)
-app.title = "籌碼K線 / 關鍵分點"
+app.title = "籌碼K線"
 
 app.layout = html.Div(
     style={"fontFamily": "system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial", "padding": "12px"},
@@ -1055,12 +1074,21 @@ app.layout = html.Div(
                     step=1,
                     style={"width": "80px", "padding": "6px 8px"},
                 ),
+                dcc.Checklist(
+                    id="key-branch-toggle",
+                    options=[{"label": "關鍵分點附加功能", "value": "enabled"}],
+                    value=[],
+                    inputStyle={"marginRight": "6px"},
+                    labelStyle={"fontWeight": 600, "whiteSpace": "nowrap"},
+                    style={"marginLeft": "6px", "fontSize": "13px"},
+                ),
                 html.Div(id="hint", style={"marginLeft": "auto", "opacity": 0.75, "fontSize": "12px"}),
             ],
         ),
 
         html.Div(
-            style={"border": "1px solid #dbeafe", "borderRadius": "10px", "padding": "10px", "marginBottom": "12px", "background": "#f8fbff"},
+            id="key-branch-overview-panel",
+            style={"display": "none", "border": "1px solid #dbeafe", "borderRadius": "10px", "padding": "10px", "marginBottom": "12px", "background": "#f8fbff"},
             children=[
                 html.Div(
                     style={"display": "flex", "justifyContent": "space-between", "gap": "12px", "alignItems": "baseline", "marginBottom": "8px"},
@@ -1112,14 +1140,16 @@ app.layout = html.Div(
                             ],
                         ),
                         html.Div(
-                            style={"border": "1px solid #fed7aa", "borderRadius": "10px", "padding": "10px", "background": "#fffaf5"},
+                            id="key-relation-panel",
+                            style={"display": "none", "border": "1px solid #fed7aa", "borderRadius": "10px", "padding": "10px", "background": "#fffaf5"},
                             children=[
                                 html.Div("股票 / 權證關係", style={"fontWeight": 700, "marginBottom": "8px"}),
                                 html.Div(id="key-relation-box"),
                             ],
                         ),
                         html.Div(
-                            style={"border": "1px solid #e5e7eb", "borderRadius": "10px", "padding": "10px"},
+                            id="key-case-panel",
+                            style={"display": "none", "border": "1px solid #e5e7eb", "borderRadius": "10px", "padding": "10px"},
                             children=[
                                 html.Div("本股關鍵分點 Case", style={"fontWeight": 700, "marginBottom": "8px"}),
                                 dash_table.DataTable(
@@ -1134,7 +1164,8 @@ app.layout = html.Div(
                             ],
                         ),
                         html.Div(
-                            style={"border": "1px solid #e5e7eb", "borderRadius": "10px", "padding": "10px"},
+                            id="key-event-panel",
+                            style={"display": "none", "border": "1px solid #e5e7eb", "borderRadius": "10px", "padding": "10px"},
                             children=[
                                 html.Div("本股關鍵分點事件", style={"fontWeight": 700, "marginBottom": "8px"}),
                                 dash_table.DataTable(
@@ -1211,6 +1242,23 @@ app.layout = html.Div(
 
 
 @app.callback(
+    Output("key-branch-overview-panel", "style"),
+    Output("key-relation-panel", "style"),
+    Output("key-case-panel", "style"),
+    Output("key-event-panel", "style"),
+    Input("key-branch-toggle", "value"),
+)
+def toggle_key_branch_panels(key_branch_toggle):
+    display = "block" if key_branch_enabled(key_branch_toggle) else "none"
+    return (
+        {"display": display, "border": "1px solid #dbeafe", "borderRadius": "10px", "padding": "10px", "marginBottom": "12px", "background": "#f8fbff"},
+        {"display": display, "border": "1px solid #fed7aa", "borderRadius": "10px", "padding": "10px", "background": "#fffaf5"},
+        {"display": display, "border": "1px solid #e5e7eb", "borderRadius": "10px", "padding": "10px"},
+        {"display": display, "border": "1px solid #e5e7eb", "borderRadius": "10px", "padding": "10px"},
+    )
+
+
+@app.callback(
     Output("store-ohlcv", "data"),
     Output("store-broker", "data"),
     Output("store-warrant-broker", "data"),
@@ -1229,9 +1277,10 @@ app.layout = html.Div(
     Output("hint", "children"),
     Output("store-pending-broker", "data"),
     Input("stock-input", "value"),
+    Input("key-branch-toggle", "value"),
     State("store-pending-broker", "data"),
 )
-def on_stock_change(stock_id: str, pending_broker: str | None):
+def on_stock_change(stock_id: str, key_branch_toggle, pending_broker: str | None):
     stock_id = (stock_id or "").strip()
     if not stock_id:
         return (
@@ -1254,7 +1303,11 @@ def on_stock_change(stock_id: str, pending_broker: str | None):
             None,
         )
 
-    ohlcv, broker_df, warrant_broker_df, key_events, key_cases, brokers, event_dates = load_data(stock_id)
+    include_key_branch = key_branch_enabled(key_branch_toggle)
+    ohlcv, broker_df, warrant_broker_df, key_events, key_cases, brokers, event_dates = load_data(
+        stock_id,
+        include_key_branch=include_key_branch,
+    )
 
     options = [{"label": b, "value": b} for b in brokers]
     pending_broker = str(pending_broker or "").strip()
@@ -1280,10 +1333,9 @@ def on_stock_change(stock_id: str, pending_broker: str | None):
         start_date = None
         end_date = None
 
-    hint = (
-        f"資料筆數：K線 {len(ohlcv)} 天、股票分點 {len(broker_df):,} 筆、"
-        f"權證分點 {len(warrant_broker_df):,} 筆、關鍵事件 {len(key_events):,} 筆"
-    )
+    hint = f"資料筆數：K線 {len(ohlcv)} 天、股票分點 {len(broker_df):,} 筆"
+    if include_key_branch:
+        hint += f"、權證分點 {len(warrant_broker_df):,} 筆、關鍵事件 {len(key_events):,} 筆"
     return (
         ohlcv.to_dict("records"),
         broker_df.to_dict("records"),
@@ -1323,6 +1375,7 @@ def on_stock_change(stock_id: str, pending_broker: str | None):
     Input("date-start", "date"),
     Input("date-end", "date"),
     Input("topn-input", "value"),
+    Input("key-branch-toggle", "value"),
     Input("main-chart", "relayoutData"),
     State("stock-input", "value"),
 )
@@ -1337,6 +1390,7 @@ def render_all(
     start_date,
     end_date,
     topn_value,
+    key_branch_toggle,
     relayout_data,
     stock_id,
 ):
@@ -1400,18 +1454,20 @@ def render_all(
     topn_buy_daily = topn_daily_sum(broker_view, topn_value, "buy")
     topn_sell_daily = topn_daily_sum(broker_view, topn_value, "sell")
     topn_label = f"Top{int(topn_value) if topn_value else 10}"
+    show_key_branch = key_branch_enabled(key_branch_toggle)
 
     # Build chart (use date-filtered data)
     fig = build_figure(
         ohlcv_base,
         broker_base,
-        warrant_base,
-        key_events_base,
+        warrant_base if show_key_branch else pd.DataFrame(),
+        key_events_base if show_key_branch else pd.DataFrame(),
         selected_broker,
         topn_buy_daily,
         topn_sell_daily,
         topn_label,
         event_dt,
+        show_key_branch,
     )
 
     # Remove missing dates based on OHLC dates
@@ -1444,13 +1500,20 @@ def render_all(
     )
 
     top_buy, top_sell = top10_tables(broker_view)
-    relation_box = build_key_relation_panel(key_cases, key_events_view, warrant_view, selected_broker)
+    if show_key_branch:
+        relation_box = build_key_relation_panel(key_cases, key_events_view, warrant_view, selected_broker)
+        key_case_rows = format_case_table(key_cases, limit=30)
+        key_event_rows = format_event_table(key_events_view, limit=80)
+    else:
+        relation_box = "—"
+        key_case_rows = []
+        key_event_rows = []
     return (
         fig,
         summary_box,
         relation_box,
-        format_case_table(key_cases, limit=30),
-        format_event_table(key_events_view, limit=80),
+        key_case_rows,
+        key_event_rows,
         top_buy.to_dict("records"),
         top_sell.to_dict("records"),
     )
