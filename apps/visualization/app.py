@@ -1493,12 +1493,14 @@ def render_all(
     topn_label = f"Top{int(topn_value) if topn_value else 10}"
     show_key_branch = key_branch_enabled(key_branch_toggle)
 
-    # Build chart (use date-filtered data)
+    # Build chart from the visible window instead of drawing all rows and
+    # clipping with an x-axis range. Plotly candlesticks can be clipped badly
+    # when the window is a single trading day.
     fig = build_figure(
-        ohlcv_base,
-        broker_base,
-        warrant_base if show_key_branch else pd.DataFrame(),
-        key_events_base if show_key_branch else pd.DataFrame(),
+        ohlcv_view,
+        broker_view,
+        warrant_view if show_key_branch else pd.DataFrame(),
+        key_events_view if show_key_branch else pd.DataFrame(),
         selected_broker,
         topn_buy_daily,
         topn_sell_daily,
@@ -1508,18 +1510,13 @@ def render_all(
     )
 
     # Remove missing dates based on OHLC dates
-    if not ohlcv_base.empty:
-        all_days = pd.date_range(ohlcv_base["date"].min(), ohlcv_base["date"].max(), freq="D")
-        missing = all_days.difference(pd.to_datetime(ohlcv_base["date"].unique()))
+    if not ohlcv_view.empty:
+        all_days = pd.date_range(ohlcv_view["date"].min(), ohlcv_view["date"].max(), freq="D")
+        missing = all_days.difference(pd.to_datetime(ohlcv_view["date"].unique()))
         if len(missing) > 0:
             fig.update_xaxes(rangebreaks=[{"values": missing.to_pydatetime().tolist()}])
 
     # Category x-axis already skips missing dates (union across traces)
-
-    # If range present, lock xaxis range for all subplots
-    if start is not None and end is not None:
-        pad = pd.Timedelta(milliseconds=BAR_WIDTH_MS / 2)
-        fig.update_xaxes(range=[start - pad, end + pad])
 
     summary = build_summary_panel(ohlcv_view, broker_view)
     name_map = load_symbol_name_map()
