@@ -928,13 +928,15 @@ def build_figure(
         height=1040,
         xaxis_rangeslider_visible=False,
         hovermode="x unified",
+        hoverdistance=100,
+        spikedistance=-1,
         barmode="relative",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
     fig.update_xaxes(
         matches="x",
         showspikes=True,
-        spikemode="across",
+        spikemode="across+toaxis",
         spikedash="dash",
         spikecolor="#999999",
         spikethickness=1,
