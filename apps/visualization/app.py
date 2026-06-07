@@ -614,13 +614,14 @@ def build_figure(
     topn_label: str,
     event_dates: list[pd.Timestamp],
     show_key_branch: bool,
-    broker_chart_mode: str = "gross",
+    broker_net_charts: list[str] | None = None,
 ) -> go.Figure:
     bb_upper = ohlcv["bb_upper"] if "bb_upper" in ohlcv.columns else pd.Series(index=ohlcv.index, dtype=float)
     bb_mid = ohlcv["bb_mid"] if "bb_mid" in ohlcv.columns else pd.Series(index=ohlcv.index, dtype=float)
     bb_lower = ohlcv["bb_lower"] if "bb_lower" in ohlcv.columns else pd.Series(index=ohlcv.index, dtype=float)
     bar_width_ms = BAR_WIDTH_MS
     ohlcv_x = _plot_dates(ohlcv)
+    broker_net_charts = broker_net_charts or []
 
     row_count = 6 if show_key_branch else 5
     row_heights = [0.40, 0.12, 0.16, 0.16, 0.08, 0.08] if show_key_branch else [0.44, 0.14, 0.18, 0.12, 0.12]
@@ -755,7 +756,7 @@ def build_figure(
 
     # Row 3: Selected broker buy/sell
     bd = broker_df[broker_df["broker"] == selected_broker].sort_values("date")
-    if broker_chart_mode == "net":
+    if "selected" in broker_net_charts:
         fig.add_trace(
             go.Bar(
                 x=_plot_dates(bd),
@@ -841,7 +842,7 @@ def build_figure(
 
     # Top N buy brokers aggregated buy/sell
     if not topn_buy_daily.empty:
-        if broker_chart_mode == "net":
+        if "top_buy" in broker_net_charts:
             net = topn_buy_daily["buy"] - topn_buy_daily["sell"]
             fig.add_trace(
                 go.Bar(
@@ -883,7 +884,7 @@ def build_figure(
 
     # Top N sell brokers aggregated buy/sell
     if not topn_sell_daily.empty:
-        if broker_chart_mode == "net":
+        if "top_sell" in broker_net_charts:
             net = topn_sell_daily["buy"] - topn_sell_daily["sell"]
             fig.add_trace(
                 go.Bar(
@@ -1178,17 +1179,6 @@ app.layout = html.Div(
                     step=1,
                     style={"width": "80px", "padding": "6px 8px"},
                 ),
-                html.Div("分點圖：", style={"fontWeight": 600}),
-                dcc.Dropdown(
-                    id="broker-chart-mode",
-                    options=[
-                        {"label": "買/賣量", "value": "gross"},
-                        {"label": "淨買賣超", "value": "net"},
-                    ],
-                    value="gross",
-                    clearable=False,
-                    style={"width": "120px"},
-                ),
                 dcc.Checklist(
                     id="key-branch-toggle",
                     options=[{"label": "關鍵分點附加功能", "value": "enabled"}],
@@ -1233,6 +1223,24 @@ app.layout = html.Div(
                 html.Div(
                     style={"border": "1px solid #e5e7eb", "borderRadius": "10px", "padding": "8px"},
                     children=[
+                        html.Div(
+                            style={"display": "flex", "justifyContent": "flex-end", "alignItems": "center", "gap": "10px", "marginBottom": "4px"},
+                            children=[
+                                html.Div("淨額顯示：", style={"fontWeight": 600, "fontSize": "13px"}),
+                                dcc.Checklist(
+                                    id="broker-net-chart-options",
+                                    options=[
+                                        {"label": "股票分點", "value": "selected"},
+                                        {"label": "Top Buyers", "value": "top_buy"},
+                                        {"label": "Top Sellers", "value": "top_sell"},
+                                    ],
+                                    value=[],
+                                    inputStyle={"marginRight": "4px"},
+                                    labelStyle={"display": "inline-block", "marginRight": "10px", "fontSize": "12px"},
+                                    style={"whiteSpace": "nowrap"},
+                                ),
+                            ],
+                        ),
                         dcc.Graph(
                             id="main-chart",
                             config={
@@ -1490,7 +1498,7 @@ def on_stock_change(stock_id: str, key_branch_toggle, pending_broker: str | None
     Input("date-start", "date"),
     Input("date-end", "date"),
     Input("topn-input", "value"),
-    Input("broker-chart-mode", "value"),
+    Input("broker-net-chart-options", "value"),
     Input("key-branch-toggle", "value"),
     Input("main-chart", "relayoutData"),
     State("stock-input", "value"),
@@ -1506,7 +1514,7 @@ def render_all(
     start_date,
     end_date,
     topn_value,
-    broker_chart_mode,
+    broker_net_charts,
     key_branch_toggle,
     relayout_data,
     stock_id,
@@ -1588,7 +1596,7 @@ def render_all(
         topn_label,
         event_dt,
         show_key_branch,
-        broker_chart_mode or "gross",
+        broker_net_charts or [],
     )
 
     # Remove missing dates based on OHLC dates
