@@ -158,6 +158,20 @@ def _fmt_score(value: object) -> str:
     return f"{num:,.2f}"
 
 
+def remove_isolated_price_outliers(ohlcv: pd.DataFrame) -> pd.DataFrame:
+    if ohlcv.empty:
+        return ohlcv
+    close = ohlcv["close"]
+    prev_close = close.shift(1)
+    next_close = close.shift(-1)
+    low_spike = (close < prev_close * 0.7) & (close < next_close * 0.7)
+    high_spike = (close > prev_close * 1.3) & (close > next_close * 1.3)
+    outliers = (low_spike | high_spike).fillna(False)
+    if not outliers.any():
+        return ohlcv
+    return ohlcv.loc[~outliers].copy()
+
+
 def load_key_branch_events() -> pd.DataFrame:
     directory = find_key_branch_dir()
     if directory is None:
@@ -366,6 +380,7 @@ def load_data(
         ohlcv[c] = pd.to_numeric(ohlcv[c], errors="coerce")
     ohlcv["volume"] = ohlcv["volume"].fillna(0)
     ohlcv = ohlcv.sort_values("date")
+    ohlcv = remove_isolated_price_outliers(ohlcv)
     if days and days > 0:
         ohlcv = ohlcv.tail(days)
 
