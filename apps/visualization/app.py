@@ -599,6 +599,10 @@ def _plot_values(series: pd.Series) -> list[object]:
     return series.where(pd.notna(series), None).tolist()
 
 
+def _net_bar_colors(series: pd.Series) -> list[str]:
+    return ["#d24d57" if float(value) >= 0 else "#2e8b57" for value in series.fillna(0)]
+
+
 def build_figure(
     ohlcv: pd.DataFrame,
     broker_df: pd.DataFrame,
@@ -610,6 +614,7 @@ def build_figure(
     topn_label: str,
     event_dates: list[pd.Timestamp],
     show_key_branch: bool,
+    broker_chart_mode: str = "gross",
 ) -> go.Figure:
     bb_upper = ohlcv["bb_upper"] if "bb_upper" in ohlcv.columns else pd.Series(index=ohlcv.index, dtype=float)
     bb_mid = ohlcv["bb_mid"] if "bb_mid" in ohlcv.columns else pd.Series(index=ohlcv.index, dtype=float)
@@ -750,30 +755,44 @@ def build_figure(
 
     # Row 3: Selected broker buy/sell
     bd = broker_df[broker_df["broker"] == selected_broker].sort_values("date")
-    fig.add_trace(
-        go.Bar(
-            x=_plot_dates(bd),
-            y=_plot_values(bd["buy"]),
-            name=f"{selected_broker} 買入",
-            marker_color="#d24d57",
-            width=bar_width_ms,
-            showlegend=False,
-        ),
-        row=3,
-        col=1,
-    )
-    fig.add_trace(
-        go.Bar(
-            x=_plot_dates(bd),
-            y=_plot_values(-bd["sell"]),
-            name=f"{selected_broker} 賣出",
-            marker_color="#2e8b57",
-            width=bar_width_ms,
-            showlegend=False,
-        ),
-        row=3,
-        col=1,
-    )
+    if broker_chart_mode == "net":
+        fig.add_trace(
+            go.Bar(
+                x=_plot_dates(bd),
+                y=_plot_values(bd["net"]),
+                name=f"{selected_broker} 淨買賣超",
+                marker_color=_net_bar_colors(bd["net"]),
+                width=bar_width_ms,
+                showlegend=False,
+            ),
+            row=3,
+            col=1,
+        )
+    else:
+        fig.add_trace(
+            go.Bar(
+                x=_plot_dates(bd),
+                y=_plot_values(bd["buy"]),
+                name=f"{selected_broker} 買入",
+                marker_color="#d24d57",
+                width=bar_width_ms,
+                showlegend=False,
+            ),
+            row=3,
+            col=1,
+        )
+        fig.add_trace(
+            go.Bar(
+                x=_plot_dates(bd),
+                y=_plot_values(-bd["sell"]),
+                name=f"{selected_broker} 賣出",
+                marker_color="#2e8b57",
+                width=bar_width_ms,
+                showlegend=False,
+            ),
+            row=3,
+            col=1,
+        )
 
     top_buy_row = 5
     top_sell_row = 6
@@ -822,57 +841,87 @@ def build_figure(
 
     # Top N buy brokers aggregated buy/sell
     if not topn_buy_daily.empty:
-        fig.add_trace(
-            go.Bar(
-                x=_plot_dates(topn_buy_daily),
-                y=_plot_values(topn_buy_daily["buy"]),
-                name=f"{topn_label} 買入",
-                marker_color="#d24d57",
-                width=bar_width_ms,
-                showlegend=False,
-            ),
-            row=top_buy_row,
-            col=1,
-        )
-        fig.add_trace(
-            go.Bar(
-                x=_plot_dates(topn_buy_daily),
-                y=_plot_values(-topn_buy_daily["sell"]),
-                name=f"{topn_label} 賣出",
-                marker_color="#2e8b57",
-                width=bar_width_ms,
-                showlegend=False,
-            ),
-            row=top_buy_row,
-            col=1,
-        )
+        if broker_chart_mode == "net":
+            net = topn_buy_daily["buy"] - topn_buy_daily["sell"]
+            fig.add_trace(
+                go.Bar(
+                    x=_plot_dates(topn_buy_daily),
+                    y=_plot_values(net),
+                    name=f"{topn_label} 淨買賣超",
+                    marker_color=_net_bar_colors(net),
+                    width=bar_width_ms,
+                    showlegend=False,
+                ),
+                row=top_buy_row,
+                col=1,
+            )
+        else:
+            fig.add_trace(
+                go.Bar(
+                    x=_plot_dates(topn_buy_daily),
+                    y=_plot_values(topn_buy_daily["buy"]),
+                    name=f"{topn_label} 買入",
+                    marker_color="#d24d57",
+                    width=bar_width_ms,
+                    showlegend=False,
+                ),
+                row=top_buy_row,
+                col=1,
+            )
+            fig.add_trace(
+                go.Bar(
+                    x=_plot_dates(topn_buy_daily),
+                    y=_plot_values(-topn_buy_daily["sell"]),
+                    name=f"{topn_label} 賣出",
+                    marker_color="#2e8b57",
+                    width=bar_width_ms,
+                    showlegend=False,
+                ),
+                row=top_buy_row,
+                col=1,
+            )
 
     # Top N sell brokers aggregated buy/sell
     if not topn_sell_daily.empty:
-        fig.add_trace(
-            go.Bar(
-                x=_plot_dates(topn_sell_daily),
-                y=_plot_values(topn_sell_daily["buy"]),
-                name=f"{topn_label} 賣超 買入",
-                marker_color="#d24d57",
-                width=bar_width_ms,
-                showlegend=False,
-            ),
-            row=top_sell_row,
-            col=1,
-        )
-        fig.add_trace(
-            go.Bar(
-                x=_plot_dates(topn_sell_daily),
-                y=_plot_values(-topn_sell_daily["sell"]),
-                name=f"{topn_label} 賣超 賣出",
-                marker_color="#2e8b57",
-                width=bar_width_ms,
-                showlegend=False,
-            ),
-            row=top_sell_row,
-            col=1,
-        )
+        if broker_chart_mode == "net":
+            net = topn_sell_daily["buy"] - topn_sell_daily["sell"]
+            fig.add_trace(
+                go.Bar(
+                    x=_plot_dates(topn_sell_daily),
+                    y=_plot_values(net),
+                    name=f"{topn_label} 賣超 淨買賣超",
+                    marker_color=_net_bar_colors(net),
+                    width=bar_width_ms,
+                    showlegend=False,
+                ),
+                row=top_sell_row,
+                col=1,
+            )
+        else:
+            fig.add_trace(
+                go.Bar(
+                    x=_plot_dates(topn_sell_daily),
+                    y=_plot_values(topn_sell_daily["buy"]),
+                    name=f"{topn_label} 賣超 買入",
+                    marker_color="#d24d57",
+                    width=bar_width_ms,
+                    showlegend=False,
+                ),
+                row=top_sell_row,
+                col=1,
+            )
+            fig.add_trace(
+                go.Bar(
+                    x=_plot_dates(topn_sell_daily),
+                    y=_plot_values(-topn_sell_daily["sell"]),
+                    name=f"{topn_label} 賣超 賣出",
+                    marker_color="#2e8b57",
+                    width=bar_width_ms,
+                    showlegend=False,
+                ),
+                row=top_sell_row,
+                col=1,
+            )
     fig.update_layout(
         margin=dict(l=10, r=10, t=30, b=10),
         height=1040,
@@ -1128,6 +1177,17 @@ app.layout = html.Div(
                     max=200,
                     step=1,
                     style={"width": "80px", "padding": "6px 8px"},
+                ),
+                html.Div("分點圖：", style={"fontWeight": 600}),
+                dcc.Dropdown(
+                    id="broker-chart-mode",
+                    options=[
+                        {"label": "買/賣量", "value": "gross"},
+                        {"label": "淨買賣超", "value": "net"},
+                    ],
+                    value="gross",
+                    clearable=False,
+                    style={"width": "120px"},
                 ),
                 dcc.Checklist(
                     id="key-branch-toggle",
@@ -1430,6 +1490,7 @@ def on_stock_change(stock_id: str, key_branch_toggle, pending_broker: str | None
     Input("date-start", "date"),
     Input("date-end", "date"),
     Input("topn-input", "value"),
+    Input("broker-chart-mode", "value"),
     Input("key-branch-toggle", "value"),
     Input("main-chart", "relayoutData"),
     State("stock-input", "value"),
@@ -1445,6 +1506,7 @@ def render_all(
     start_date,
     end_date,
     topn_value,
+    broker_chart_mode,
     key_branch_toggle,
     relayout_data,
     stock_id,
@@ -1526,6 +1588,7 @@ def render_all(
         topn_label,
         event_dt,
         show_key_branch,
+        broker_chart_mode or "gross",
     )
 
     # Remove missing dates based on OHLC dates
