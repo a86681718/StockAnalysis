@@ -599,6 +599,18 @@ def _plot_values(series: pd.Series) -> list[object]:
     return series.where(pd.notna(series), None).tolist()
 
 
+def hover_x_value(hover_data: dict | None) -> str | None:
+    if not hover_data:
+        return None
+    points = hover_data.get("points")
+    if not points:
+        return None
+    value = points[0].get("x")
+    if value is None:
+        return None
+    return str(value)
+
+
 def _net_bar_colors(series: pd.Series) -> list[str]:
     return ["#d24d57" if float(value) >= 0 else "#2e8b57" for value in series.fillna(0)]
 
@@ -956,6 +968,23 @@ def build_figure(
         fig.update_yaxes(title_text="權證分點", row=4, col=1)
     fig.update_yaxes(title_text="Top Buyers", row=top_buy_row, col=1)
     fig.update_yaxes(title_text="Top Sellers", row=top_sell_row, col=1)
+    return fig
+
+
+def add_hover_line(fig: go.Figure, x_value: str | None) -> go.Figure:
+    if not x_value:
+        return fig
+    fig.add_shape(
+        type="line",
+        xref="x",
+        yref="paper",
+        x0=x_value,
+        x1=x_value,
+        y0=0,
+        y1=1,
+        line=dict(color="#666666", width=1, dash="dash"),
+        layer="above",
+    )
     return fig
 
 
@@ -1502,6 +1531,7 @@ def on_stock_change(stock_id: str, key_branch_toggle, pending_broker: str | None
     Input("topn-input", "value"),
     Input("broker-net-chart-options", "value"),
     Input("key-branch-toggle", "value"),
+    Input("main-chart", "hoverData"),
     Input("main-chart", "relayoutData"),
     State("stock-input", "value"),
 )
@@ -1518,6 +1548,7 @@ def render_all(
     topn_value,
     broker_net_charts,
     key_branch_toggle,
+    hover_data,
     relayout_data,
     stock_id,
 ):
@@ -1607,6 +1638,7 @@ def render_all(
         missing = all_days.difference(pd.to_datetime(ohlcv_view["date"].unique()))
         if len(missing) > 0:
             fig.update_xaxes(rangebreaks=[{"values": missing.to_pydatetime().tolist()}])
+    add_hover_line(fig, hover_x_value(hover_data))
 
     # Category x-axis already skips missing dates (union across traces)
 
