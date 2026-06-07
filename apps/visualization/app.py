@@ -582,6 +582,19 @@ def _plot_dates(df: pd.DataFrame, date_col: str = "date") -> list[str]:
     return pd.to_datetime(df[date_col], errors="coerce").dt.strftime("%Y-%m-%d").tolist()
 
 
+def _axis_ticks(dates: list[str], max_ticks: int = 8) -> tuple[list[str], list[str]]:
+    if not dates:
+        return [], []
+    if len(dates) <= max_ticks:
+        tick_values = dates
+    else:
+        indexes = {round(i * (len(dates) - 1) / (max_ticks - 1)) for i in range(max_ticks)}
+        indexes.update({0, len(dates) - 1})
+        tick_values = [dates[i] for i in sorted(indexes)]
+    tick_text = [pd.to_datetime(value).strftime("%m-%d") for value in tick_values]
+    return tick_values, tick_text
+
+
 def _plot_values(series: pd.Series) -> list[object]:
     return series.where(pd.notna(series), None).tolist()
 
@@ -877,6 +890,9 @@ def build_figure(
         spikethickness=1,
         spikesnap="cursor",
     )
+    tick_values, tick_text = _axis_ticks(ohlcv_x)
+    if tick_values:
+        fig.update_xaxes(tickmode="array", tickvals=tick_values, ticktext=tick_text)
 
     fig.update_yaxes(title_text="Price", row=1, col=1)
     fig.update_yaxes(title_text="Volume", row=2, col=1)
