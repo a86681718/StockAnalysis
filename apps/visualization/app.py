@@ -891,6 +891,7 @@ def build_figure(
         spikesnap="cursor",
         tickformat="%m-%d",
         hoverformat="%Y-%m-%d",
+        unifiedhovertitle=dict(text="%{x|%Y-%m-%d}"),
     )
     tick_values, tick_text = _axis_ticks(ohlcv_x)
     if tick_values:
