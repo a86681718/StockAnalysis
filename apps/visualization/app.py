@@ -889,6 +889,8 @@ def build_figure(
         spikecolor="#999999",
         spikethickness=1,
         spikesnap="cursor",
+        tickformat="%m-%d",
+        hoverformat="%Y-%m-%d",
     )
     tick_values, tick_text = _axis_ticks(ohlcv_x)
     if tick_values:
