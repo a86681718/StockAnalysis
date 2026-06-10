@@ -20,6 +20,7 @@ from bs_report_pipeline import BsReportEtl
 
 
 MARKETS = ("twse", "tpex")
+DEFAULT_GCS_BASE_URI = "gs://stock-crawler-bucket-project-3b72568d-c2fc-4e6c-89b/bs_report"
 
 
 @dataclass
@@ -41,7 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-archive", dest="archive", action="store_false", help="Keep source folders in inbox.")
     parser.set_defaults(archive=True)
     parser.add_argument("--dry-run", action="store_true", help="Show planned actions without writing changes.")
-    parser.add_argument("--gcs-base-uri", default="gs://stock-crawler-bucket-20260302/bs_report")
+    parser.add_argument("--gcs-base-uri", default=DEFAULT_GCS_BASE_URI)
     parser.add_argument("--max-workers", type=int, default=6)
     parser.add_argument("--limit", type=int, help="Only process the first N pending folders per market.")
     parser.add_argument("--since", help="Only process folders on or after YYYYMMDD.")

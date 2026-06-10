@@ -164,6 +164,12 @@ Instead it:
 
 This is the preferred and safe default.
 
+Default GCS source:
+
+```text
+gs://stock-crawler-bucket-project-3b72568d-c2fc-4e6c-89b/bs_report
+```
+
 ### Normal execution
 
 ```bash
