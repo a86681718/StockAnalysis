@@ -42,6 +42,21 @@ def _safe_date(value: Any) -> str:
     return pd.to_datetime(value).strftime("%Y-%m-%d")
 
 
+def _next_open_label(latest_data_date: str | None) -> str:
+    if not latest_data_date:
+        return ""
+    # Dashboard is a pre-open execution report. Use the next weekday as the
+    # default execution label; market-holiday exceptions can still be handled
+    # by the operator before order placement.
+    return (pd.Timestamp(latest_data_date) + pd.offsets.BDay(1)).strftime("%Y-%m-%d")
+
+
+def _display_param(value: Any, fallback: Any = "none") -> str:
+    if value is None or pd.isna(value):
+        return str(fallback)
+    return str(value)
+
+
 def _pct(value: Any, digits: int = 1) -> str:
     if value is None or pd.isna(value):
         return "-"
@@ -108,6 +123,7 @@ def _strategy_s1() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     date_info = _date_range(signals)
     latest = _latest_rows(signals)
     best = summary.get("best", {})
+    best_params = json.loads(str(best.get("params_json", "{}"))) if best.get("params_json") else {}
     metrics = {
         "trades": best.get("trades", len(trades)),
         "winRate": best.get("win_rate"),
@@ -119,14 +135,17 @@ def _strategy_s1() -> tuple[dict[str, Any], list[dict[str, Any]]]:
 
     candidates: list[dict[str, Any]] = []
     for _, row in latest.sort_values("score", ascending=False).head(5).iterrows():
+        is_formal = bool(best.get("target_pass"))
         candidates.append(
             {
                 "strategy": "S1",
                 "symbol": _safe_str(row.get("symbol")),
                 "date": _safe_date(row.get("date")),
-                "status": "stale",
-                "statusLabel": "歷史最新訊號",
-                "rankNote": "S1 hybrid artifact 未延伸到目前資料日，僅供回看",
+                "status": "formal" if is_formal else "rank-only",
+                "statusLabel": "正式候選" if is_formal else "排名參考",
+                "rankNote": "通過 S1 hybrid target gate，需看 next-open 執行價格"
+                if is_formal
+                else "S1 hybrid target gate 未過，不能當正式可買",
                 "score": _safe_float(row.get("score")),
                 "price": None,
                 "fields": {
@@ -156,9 +175,13 @@ def _strategy_s1() -> tuple[dict[str, Any], list[dict[str, Any]]]:
             "0.5 <= volume_ratio_5_20 <= 3.0",
             "ret_5d <= 0.30",
         ],
-        "execution": ["next open 進場", "hold_days = 30", "stop_loss = none"],
+        "execution": [
+            "next open 進場",
+            f"hold_days = {best_params.get('hold_days', best.get('hold_days', 30))}",
+            f"stop_loss = {_display_param(best_params.get('stop_loss', best.get('stop_loss')), 'none')}",
+        ],
         "notes": [
-            "目前工作樹的 summary 顯示 target_pass=false。",
+            f"目前 summary target_pass={bool(best.get('target_pass'))}。",
             "base branch raw signals 不能直接當 S1 hybrid 可買名單。",
         ],
         "sources": [
@@ -173,10 +196,30 @@ def _strategy_s1() -> tuple[dict[str, Any], list[dict[str, Any]]]:
 def _strategy_s2() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     trades = pd.read_parquet(S2_DIR / "warrant_leads_stock_refine_trades.parquet")
     signals = pd.read_parquet(S2_DIR / "warrant_leads_stock_refine_signals.parquet")
+    leaderboard = pd.read_csv(S2_DIR / "warrant_leads_stock_refine_leaderboard.csv")
     date_info = _date_range(signals)
     latest = _latest_rows(signals)
     metrics = _summary_metrics_from_trades(trades)
     metrics["profitFactor"] = None
+    best_params: dict[str, Any] = {}
+    if not leaderboard.empty and "params_json" in leaderboard.columns:
+        best_params = json.loads(str(leaderboard.iloc[0]["params_json"]))
+
+    def _rule_line(key: str, label: str) -> str | None:
+        if key not in best_params:
+            return None
+        return f"{label} {best_params[key]}"
+
+    dynamic_rules = [
+        _rule_line("warrant_posnet_floor", "warrant_posnet_pct_cs >="),
+        _rule_line("warrant_posnet_strong_days_20", "warrant_posnet_strong_days_20 >="),
+        _rule_line("stock_posnet_floor", "stock_posnet_pct_cs >="),
+        _rule_line("stock_posnet_cap", "stock_posnet_pct_cs <="),
+        _rule_line("prior_abs_ret_20d", "prior_abs_ret_20d <="),
+        _rule_line("volume_ratio_5_20_cap", "volume_ratio_5_20 <="),
+        _rule_line("warrant_dyn_k_pct_cs_floor", "warrant_dyn_k_pct_cs >="),
+    ]
+    rules = [rule for rule in dynamic_rules if rule]
 
     candidates: list[dict[str, Any]] = []
     for _, row in latest.sort_values(["warrant_posnet_pct_cs", "warrant_dyn_k_pct_cs"], ascending=False).iterrows():
@@ -187,7 +230,7 @@ def _strategy_s2() -> tuple[dict[str, Any], list[dict[str, Any]]]:
                 "date": _safe_date(row.get("date")),
                 "status": "formal",
                 "statusLabel": "正式候選",
-                "rankNote": "通過 S2 固定條件，需看 next-open 執行價格",
+                "rankNote": "通過 S2 目前 best scan 條件，需看 next-open 執行價格",
                 "score": _safe_float(row.get("warrant_posnet_pct_cs")),
                 "price": _safe_float(row.get("close")),
                 "fields": {
@@ -212,14 +255,13 @@ def _strategy_s2() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         "signalDate": date_info["max"],
         "coverage": date_info,
         "metrics": metrics,
-        "rules": [
-            "warrant_posnet_pct_cs >= 0.98",
-            "warrant_dyn_k_pct_cs >= 0.90",
-            "warrant_posnet_strong_days_20 >= 3",
-            "0.80 <= stock_posnet_pct_cs <= 0.95",
-            "prior_abs_ret_20d <= 0.08",
+        "rules": rules,
+        "execution": [
+            "next open 進場",
+            f"hold_days = {best_params.get('hold_days', 40)}",
+            f"cooldown = {best_params.get('cooldown_days', 15)} trading days",
+            f"stop_loss = {best_params.get('stop_loss', -0.10)}",
         ],
-        "execution": ["next open 進場", "hold_days = 40", "cooldown = 15 trading days", "stop_loss = -10%"],
         "notes": [
             "找權證端極強，但現股端尚未過度擁擠的標的。",
             "最新訊號仍屬 forward/pending，完整 40 日結果要等後續資料。",
@@ -335,7 +377,7 @@ def _build_payload() -> dict[str, Any]:
     return {
         "generatedAt": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
         "latestDataDate": latest_data_date,
-        "nextOpenLabel": "2026-06-08",
+        "nextOpenLabel": _next_open_label(latest_data_date),
         "strategies": strategies,
         "candidates": candidates,
         "summary": {
