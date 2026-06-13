@@ -52,6 +52,45 @@ FAMILY_NOTES = {
     },
 }
 
+LEGACY_BASELINE_PARAMS = {
+    "diffuse_buyer_accumulation": {
+        "hold_days": 40,
+        "stop_loss": None,
+        "cooldown_days": 10,
+        "params": {
+            "balance_pct": 0.98,
+            "buyer_count_pct": 0.98,
+            "ret5_cap": 0.15,
+            "sell_pressure_cap": 1.0,
+            "top_buyer_share_cap": 0.25,
+            "volume_cap": 1.5,
+        },
+    },
+    "role_reversal": {
+        "hold_days": 40,
+        "stop_loss": None,
+        "cooldown_days": 10,
+        "params": {
+            "min_count": 3,
+            "ret5_cap": 10.0,
+            "score_pct": 0.99,
+            "volume_cap": 3.0,
+        },
+    },
+    "sell_pressure_absorption": {
+        "hold_days": 40,
+        "stop_loss": None,
+        "cooldown_days": 10,
+        "params": {
+            "balance_min": 0.6,
+            "buyer_count_pct": 0.9,
+            "ret3_floor": 0.0,
+            "sell_pressure_pct": 0.98,
+            "volume_cap": 3.0,
+        },
+    },
+}
+
 
 @dataclass(frozen=True)
 class CostConfig:
@@ -422,6 +461,18 @@ def _make_signals(feat: pd.DataFrame, family: str, params: dict[str, Any]) -> pd
         score = f["negnet_total_pct_cs"] + f["buyer_count_pct_cs"] + f["pos_neg_balance"].clip(upper=3)
     else:
         raise ValueError(f"unknown family: {family}")
+    if "price_pos_min" in params:
+        cond &= f["price_pos_20"] >= params["price_pos_min"]
+    if "price_pos_max" in params:
+        cond &= f["price_pos_20"] <= params["price_pos_max"]
+    if "breakout_min" in params:
+        cond &= f["breakout_gap_20"] >= params["breakout_min"]
+    if "breakout_max" in params:
+        cond &= f["breakout_gap_20"] <= params["breakout_max"]
+    if "ret3_min" in params:
+        cond &= f["ret_3d"] >= params["ret3_min"]
+    if "ret5_min" in params:
+        cond &= f["ret_5d"] >= params["ret5_min"]
     out = f.loc[cond].copy()
     out["event_family"] = family
     out["score"] = score.loc[out.index]
@@ -436,6 +487,7 @@ def _make_signals(feat: pd.DataFrame, family: str, params: dict[str, Any]) -> pd
         "ret_3d",
         "ret_5d",
         "breakout_gap_20",
+        "price_pos_20",
         "volume_ratio_20",
         "role_reversal_score",
         "role_reversal_count",
@@ -451,7 +503,7 @@ def _make_signals(feat: pd.DataFrame, family: str, params: dict[str, Any]) -> pd
 
 
 def iter_family_params() -> dict[str, list[dict[str, Any]]]:
-    return {
+    params = {
         "role_reversal": [
             {
                 "score_pct": score_pct,
@@ -489,6 +541,29 @@ def iter_family_params() -> dict[str, list[dict[str, Any]]]:
             )
         ],
     }
+    params["role_reversal"].append(
+        {
+            "score_pct": 0.99,
+            "min_count": 3,
+            "volume_cap": 1.5,
+            "ret5_cap": 10.0,
+            "price_pos_min": 0.4,
+            "ret5_min": 0.05,
+        }
+    )
+    params["sell_pressure_absorption"].append(
+        {
+            "sell_pressure_pct": 0.98,
+            "buyer_count_pct": 0.9,
+            "balance_min": 0.6,
+            "ret3_floor": 0.03,
+            "volume_cap": 2.0,
+            "price_pos_min": 0.4,
+            "breakout_max": 0.1,
+            "ret5_min": 0.05,
+        }
+    )
+    return params
 
 
 def run_search(feat: pd.DataFrame, ohlc_maps: dict[str, dict[str, Any]], min_trades: int) -> tuple[pd.DataFrame, dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
@@ -499,7 +574,7 @@ def run_search(feat: pd.DataFrame, ohlc_maps: dict[str, dict[str, Any]], min_tra
         best_score: tuple[Any, ...] | None = None
         for param_i, params in enumerate(params_list, start=1):
             signals0 = _make_signals(feat, family, params)
-            for hold_days, stop_loss, cooldown_days in itertools.product([10, 20, 40], [None, -0.10, -0.15], [10, 20]):
+            for hold_days, stop_loss, cooldown_days in itertools.product([10, 20, 40, 60], [None, -0.10, -0.15], [10, 20]):
                 signals = _dedup_cooldown(signals0, cooldown_days)
                 trades = simulate_trades(signals, ohlc_maps, hold_days, stop_loss)
                 metrics = trade_metrics(trades)
@@ -538,13 +613,58 @@ def run_search(feat: pd.DataFrame, ohlc_maps: dict[str, dict[str, Any]], min_tra
     return leaderboard, best_signals, best_trades
 
 
-def build_report(leaderboard: pd.DataFrame, best_trades: dict[str, pd.DataFrame]) -> str:
+def build_improvement_comparison(leaderboard: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for family, baseline in LEGACY_BASELINE_PARAMS.items():
+        params_json = json.dumps(baseline["params"], sort_keys=True)
+        stop_loss = baseline["stop_loss"]
+        base_mask = (
+            (leaderboard["event_family"] == family)
+            & (leaderboard["hold_days"] == baseline["hold_days"])
+            & (leaderboard["cooldown_days"] == baseline["cooldown_days"])
+            & (leaderboard["params_json"] == params_json)
+        )
+        if stop_loss is None:
+            base_mask &= leaderboard["stop_loss"].isna()
+        else:
+            base_mask &= leaderboard["stop_loss"] == stop_loss
+        baseline_rows = leaderboard.loc[base_mask]
+        best_rows = leaderboard.loc[leaderboard["event_family"] == family]
+        if baseline_rows.empty or best_rows.empty:
+            continue
+        base = baseline_rows.iloc[0]
+        best = best_rows.iloc[0]
+        avg_improvement = float(best["avg_net_ret"] / base["avg_net_ret"] - 1.0)
+        win_improvement = float(best["win_rate"] / base["win_rate"] - 1.0)
+        rows.append(
+            {
+                "event_family": family,
+                "baseline_trades": int(base["trades"]),
+                "baseline_win_rate": float(base["win_rate"]),
+                "baseline_avg_net_ret": float(base["avg_net_ret"]),
+                "optimized_trades": int(best["trades"]),
+                "optimized_win_rate": float(best["win_rate"]),
+                "optimized_avg_net_ret": float(best["avg_net_ret"]),
+                "avg_net_ret_improvement": avg_improvement,
+                "win_rate_improvement": win_improvement,
+                "optimized_hold_days": int(best["hold_days"]),
+                "optimized_stop_loss": best["stop_loss"],
+                "optimized_cooldown_days": int(best["cooldown_days"]),
+                "optimized_params_json": best["params_json"],
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def build_report(leaderboard: pd.DataFrame, best_trades: dict[str, pd.DataFrame], comparison: pd.DataFrame) -> str:
     lines = [
         "# Raw Broker Microstructure Research",
         "",
         "Inputs: raw `data/ohlc/*.csv` and raw broker parquet under `data/bs_report/parquet_*` only.",
         "",
         "Target gate: `trades >= min_trades`, `win_rate > 60%`, `avg_net_ret > 10%`.",
+        "",
+        "Improvement is measured against the prior best row for the same family using average net return.",
         "",
         "## Research Directions",
         "",
@@ -595,6 +715,19 @@ def build_report(leaderboard: pd.DataFrame, best_trades: dict[str, pd.DataFrame]
                     f"`exit={pd.Timestamp(row['exit_date']).date()}`"
                 )
             lines.append("")
+    lines.extend(["## Improvement vs Prior Best", ""])
+    if comparison.empty:
+        lines.append("No baseline comparison rows were available.")
+    else:
+        for _, row in comparison.iterrows():
+            lines.append(
+                f"- `{row['event_family']}`: avg `{row['baseline_avg_net_ret']:.4f}` -> "
+                f"`{row['optimized_avg_net_ret']:.4f}` "
+                f"(`{row['avg_net_ret_improvement']:.2%}`), trades "
+                f"`{int(row['baseline_trades'])}` -> `{int(row['optimized_trades'])}`, "
+                f"win `{row['baseline_win_rate']:.4f}` -> `{row['optimized_win_rate']:.4f}`"
+            )
+        lines.append("")
     passing = leaderboard[leaderboard["target_pass"]]
     lines.extend(["## Passing Rows", ""])
     if passing.empty:
@@ -629,7 +762,9 @@ def main() -> None:
     feat = build_micro_features(ohlc, args.start, args.end, args.max_symbols)
     feat.to_parquet(out_dir / "raw_micro_features.parquet", index=False)
     leaderboard, best_signals, best_trades = run_search(feat, ohlc_maps, args.min_trades)
+    comparison = build_improvement_comparison(leaderboard)
     leaderboard.to_csv(out_dir / "raw_microstructure_leaderboard.csv", index=False)
+    comparison.to_csv(out_dir / "raw_microstructure_improvement_comparison.csv", index=False)
     for family, signals in best_signals.items():
         signals.to_csv(out_dir / f"{family}_best_signals.csv", index=False)
     for family, trades in best_trades.items():
@@ -644,7 +779,7 @@ def main() -> None:
         "passing_families": sorted(leaderboard.loc[leaderboard["target_pass"], "event_family"].unique().tolist()),
     }
     (out_dir / "raw_microstructure_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    (out_dir / "raw_microstructure_report.md").write_text(build_report(leaderboard, best_trades), encoding="utf-8")
+    (out_dir / "raw_microstructure_report.md").write_text(build_report(leaderboard, best_trades, comparison), encoding="utf-8")
     print(out_dir / "raw_microstructure_report.md")
 
 
