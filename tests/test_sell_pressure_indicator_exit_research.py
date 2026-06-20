@@ -66,6 +66,24 @@ class SellPressureIndicatorExitResearchTest(unittest.TestCase):
         self.assertEqual(trades.loc[0, "exit_reason"], "OPEN")
         self.assertAlmostEqual(trades.loc[0, "net_ret"], 0.10)
 
+    def test_age_adjusted_chandelier_tightens_without_forced_exit(self) -> None:
+        maps = _feature_map(
+            [100.0, 100.0, 100.0, 100.0, 90.0],
+            [100.0, 110.0, 110.0, 110.0, 110.0],
+            [4.0] * 5,
+        )
+        trades = simulate_policy(
+            self.signals,
+            maps,
+            IndicatorPolicy("age_adjusted_chandelier", stage1_end=1, stage2_end=2),
+            pd.Timestamp("2026-01-05"),
+            self.no_cost,
+        )
+
+        self.assertEqual(trades.loc[0, "position_status"], "CLOSED")
+        self.assertEqual(trades.loc[0, "exit_reason"], "AGE_ADJUSTED_ATR3")
+        self.assertEqual(trades.loc[0, "holding_observations"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()

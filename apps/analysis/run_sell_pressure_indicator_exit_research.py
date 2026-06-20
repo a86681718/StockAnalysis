@@ -19,6 +19,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SIGNALS = PROJECT_ROOT / "outputs/analysis/raw_broker_microstructure/sell_pressure_absorption_best_signals.csv"
 DEFAULT_FEATURES = PROJECT_ROOT / "outputs/analysis/raw_broker_microstructure/raw_micro_features.parquet"
 DEFAULT_OUT = PROJECT_ROOT / "outputs/analysis/sell_pressure_indicator_exit_research"
+FOLD_RANGES = [
+    ("2025-10-01", "2025-11-30"),
+    ("2025-12-01", "2026-01-31"),
+    ("2026-02-01", "2026-03-31"),
+    ("2026-04-01", "2026-06-17"),
+]
 
 
 @dataclass(frozen=True)
@@ -28,6 +34,8 @@ class IndicatorPolicy:
     ema_span: int | None = None
     balance_threshold: float | None = None
     breadth_threshold: float | None = None
+    stage1_end: int | None = None
+    stage2_end: int | None = None
 
     @property
     def policy_id(self) -> str:
@@ -40,6 +48,8 @@ class IndicatorPolicy:
             parts.append(f"balance{self.balance_threshold:g}")
         if self.breadth_threshold is not None:
             parts.append(f"breadth{self.breadth_threshold:g}")
+        if self.stage1_end is not None and self.stage2_end is not None:
+            parts.append(f"stages{self.stage1_end}-{self.stage2_end}")
         return "_".join(parts)
 
 
@@ -115,16 +125,32 @@ def policy_grid() -> list[IndicatorPolicy]:
         for atr in [4.0, 5.0]
         for balance in [0.6, 1.0]
     )
+    policies.extend(
+        IndicatorPolicy("age_adjusted_chandelier", stage1_end=stage1, stage2_end=stage2)
+        for stage1, stage2 in [(10, 30), (20, 40), (30, 60)]
+    )
     return policies
 
 
-def indicator_reason(row: pd.Series, peak_high: float, policy: IndicatorPolicy) -> str | None:
+def indicator_reason(
+    row: pd.Series, peak_high: float, policy: IndicatorPolicy, holding_observations: int
+) -> str | None:
     balance_weak = bool(row["pos_neg_balance"] < policy.balance_threshold) if policy.balance_threshold is not None else False
     breadth_weak = bool(row["buyer_count_pct_cs"] < policy.breadth_threshold) if policy.breadth_threshold is not None else False
     trend_weak = bool(row["close"] < row[f"ema{policy.ema_span}"]) if policy.ema_span is not None else False
     chandelier_weak = False
     if policy.atr_multiple is not None:
         chandelier_weak = bool(row["close"] < peak_high - policy.atr_multiple * row["atr14"])
+
+    if policy.policy_type == "age_adjusted_chandelier":
+        if holding_observations <= policy.stage1_end:
+            atr_multiple = 5.0
+        elif holding_observations <= policy.stage2_end:
+            atr_multiple = 4.0
+        else:
+            atr_multiple = 3.0
+        if row["close"] < peak_high - atr_multiple * row["atr14"]:
+            return f"AGE_ADJUSTED_ATR{atr_multiple:g}"
 
     if policy.policy_type == "chandelier" and chandelier_weak:
         return "CHANDELIER"
@@ -171,7 +197,7 @@ def simulate_policy(
         for idx in eligible:
             row = data.loc[idx]
             peak_high = max(peak_high, float(row["high"]))
-            reason = indicator_reason(row, peak_high, policy)
+            reason = indicator_reason(row, peak_high, policy, int(idx) - entry_idx)
             if reason is not None:
                 exit_idx = int(idx)
                 exit_reason = reason
@@ -250,16 +276,10 @@ def choose_policy(leaderboard: pd.DataFrame) -> str:
 def walk_forward(
     signals: pd.DataFrame, maps: dict[str, dict[str, Any]], policies: list[IndicatorPolicy], cost: CostConfig
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    folds = [
-        ("2025-10-01", "2025-11-30"),
-        ("2025-12-01", "2026-01-31"),
-        ("2026-02-01", "2026-03-31"),
-        ("2026-04-01", "2026-06-17"),
-    ]
     fold_rows = []
     test_parts = []
     baseline_parts = []
-    for fold_id, (start_raw, end_raw) in enumerate(folds, start=1):
+    for fold_id, (start_raw, end_raw) in enumerate(FOLD_RANGES, start=1):
         start, end = pd.Timestamp(start_raw), pd.Timestamp(end_raw)
         train_signals = signals[signals["date"] < start]
         train_board, _ = evaluate(train_signals, maps, policies, start - pd.Timedelta(days=1), cost)
@@ -289,6 +309,36 @@ def walk_forward(
     )
 
 
+def compare_fixed_policies_on_walk_forward(
+    signals: pd.DataFrame,
+    maps: dict[str, dict[str, Any]],
+    policies: list[IndicatorPolicy],
+    cost: CostConfig,
+) -> pd.DataFrame:
+    wanted = {
+        "hold_open",
+        "chandelier_atr4",
+        "chandelier_atr5",
+        "age_adjusted_chandelier_stages10-30",
+        "age_adjusted_chandelier_stages20-40",
+        "age_adjusted_chandelier_stages30-60",
+    }
+    rows = []
+    for policy in policies:
+        if policy.policy_id not in wanted:
+            continue
+        parts = []
+        for start_raw, end_raw in FOLD_RANGES:
+            start, end = pd.Timestamp(start_raw), pd.Timestamp(end_raw)
+            test_signals = signals[(signals["date"] >= start) & (signals["date"] <= end)]
+            parts.append(simulate_policy(test_signals, maps, policy, end, cost))
+        trades = pd.concat(parts, ignore_index=True)
+        rows.append({"policy_id": policy.policy_id, **asdict(policy), **metrics(trades)})
+    return pd.DataFrame(rows).sort_values(
+        ["marked_trimmed_avg_net_ret", "marked_median_net_ret"], ascending=False
+    )
+
+
 def pct(value: float) -> str:
     return "n/a" if pd.isna(value) else f"{value:.2%}"
 
@@ -299,10 +349,12 @@ def write_report(
     folds: pd.DataFrame,
     wf_trades: pd.DataFrame,
     wf_baseline: pd.DataFrame,
+    fixed_policy_comparison: pd.DataFrame,
 ) -> None:
     wf = metrics(wf_trades)
     baseline = metrics(wf_baseline)
     top = leaderboard[leaderboard["policy_type"] != "hold_open"].head(8)
+    age_adjusted = leaderboard[leaderboard["policy_type"] == "age_adjusted_chandelier"]
     lines = [
         "# 賣壓吸收策略：指標出場研究",
         "",
@@ -332,6 +384,20 @@ def write_report(
     lines.extend(
         [
             "",
+            "## 相同樣本外區間直接比較",
+            "",
+            "| 規則 | 已出場 | 平均 | 中位數 | 勝率 | 最大虧損 |",
+            "|---|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for row in fixed_policy_comparison.itertuples(index=False):
+        lines.append(
+            f"| `{row.policy_id}` | {pct(row.closed_rate)} | {pct(row.marked_avg_net_ret)} | "
+            f"{pct(row.marked_median_net_ret)} | {pct(row.marked_win_rate)} | {pct(row.marked_max_loss)} |"
+        )
+    lines.extend(
+        [
+            "",
             "## 全樣本指標比較",
             "",
             "| 指標規則 | 已出場 | 標記平均 | 標記中位數 | 勝率 | 最大虧損 | 已出場交易平均 |",
@@ -346,12 +412,30 @@ def write_report(
     lines.extend(
         [
             "",
+            "## 時間調整指標版本",
+            "",
+            "實際出場仍由 Chandelier 觸發；持有時間只把門檻由 5×ATR 逐步收緊到 4×ATR、3×ATR。",
+            "",
+            "| 階段切換 | 已出場 | 標記平均 | 標記中位數 | 勝率 | 最大虧損 |",
+            "|---|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for row in age_adjusted.itertuples(index=False):
+        lines.append(
+            f"| {int(row.stage1_end)} / {int(row.stage2_end)} 個交易觀察值 | {pct(row.closed_rate)} | "
+            f"{pct(row.marked_avg_net_ret)} | {pct(row.marked_median_net_ret)} | {pct(row.marked_win_rate)} | "
+            f"{pct(row.marked_max_loss)} |"
+        )
+    lines.extend(
+        [
+            "",
             "## 指標定義",
             "",
             "- `chandelier_atrN`：收盤跌破持有期間最高價減 N 倍 ATR14。",
             "- `price_flow`：收盤低於 EMA，且正向買盤相對賣壓的比值同步低於門檻。",
             "- `thesis_failure`：買賣平衡與買方分點廣度同時失效。",
             "- `hybrid`：Chandelier 觸發，或 EMA50、買賣平衡、買方廣度三者同時轉弱。",
+            "- `age_adjusted_chandelier`：依持有階段將 Chandelier 從 5×ATR 收緊到 4×ATR、3×ATR；天數本身不觸發賣出。",
             "",
             "未平倉部位的標記報酬不是已實現報酬；必須同時閱讀已出場比例，不能只比較平均值。",
             "",
@@ -374,14 +458,23 @@ def main() -> None:
     cost = CostConfig()
     leaderboard, trades_by_policy = evaluate(signals, maps, policies, pd.Timestamp(args.evaluation_end), cost)
     folds, wf_trades, wf_baseline = walk_forward(signals, maps, policies, cost)
+    fixed_policy_comparison = compare_fixed_policies_on_walk_forward(signals, maps, policies, cost)
 
     leaderboard.to_csv(args.out_dir / "indicator_exit_leaderboard.csv", index=False)
     folds.to_csv(args.out_dir / "walk_forward_folds.csv", index=False)
     wf_trades.to_csv(args.out_dir / "walk_forward_positions.csv", index=False)
     wf_baseline.to_csv(args.out_dir / "walk_forward_hold_open_positions.csv", index=False)
+    fixed_policy_comparison.to_csv(args.out_dir / "walk_forward_policy_comparison.csv", index=False)
     selected = choose_policy(leaderboard)
     trades_by_policy[selected].to_csv(args.out_dir / "selected_policy_positions.csv", index=False)
-    write_report(args.out_dir / "indicator_exit_report.md", leaderboard, folds, wf_trades, wf_baseline)
+    write_report(
+        args.out_dir / "indicator_exit_report.md",
+        leaderboard,
+        folds,
+        wf_trades,
+        wf_baseline,
+        fixed_policy_comparison,
+    )
     summary = {
         "evaluation_end": args.evaluation_end,
         "signals": int(len(signals)),
