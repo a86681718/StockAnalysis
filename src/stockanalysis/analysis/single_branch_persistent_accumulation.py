@@ -31,11 +31,14 @@ DEFAULT_EXCLUDED_DESK_TERMS = (
     "營業",
     "經紀部",
     "法人部",
+    "法人",
     "自營",
     "承銷",
     "國際部",
+    "國際證券",
     "金融交易部",
     "債券部",
+    "網路",
 )
 DEFAULT_EXCLUDED_SYMBOLS = frozenset({"2317", "2330"})
 

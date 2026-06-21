@@ -179,8 +179,8 @@ market data through `2026-06-17`.
 - Implemented five-session onset, twenty-session confirmation, sixty-session
   trailing baseline, and session-gap episode merging.
 - Added local-branch desk exclusions. Names containing `總公司`, `營業`,
-  `經紀部`, `法人部`, `自營`, `承銷`, `國際部`, `金融交易部`, or `債券部`
-  are not treated as local branches.
+  `經紀部`, `法人`, `自營`, `承銷`, `國際部`, `國際證券`, `金融交易部`,
+  `債券部`, or `網路` are not treated as local branches.
 - Added visible default symbol exclusions for `2317` and `2330`. This is a
   temporary explicit market prior, not a complete market-cap filter.
 - Added confidence levels: `preliminary`, `developing`, `confirmed`, and
@@ -245,11 +245,11 @@ PYTHONPATH=src .venv/bin/python -m stockanalysis.analysis.single_branch_persiste
 Final local-data results:
 
 - scanned stock symbols: `1,981`
-- historical episodes retained for audit: `10,290`
-- ongoing episodes: `850`
-- review-eligible ongoing episodes: `276`
-- daily qualifying rows: `58,941`
-- review confidence counts: `44 established`, `124 confirmed`, `108 developing`
+- historical episodes retained for audit: `10,175`
+- ongoing episodes: `843`
+- review-eligible ongoing episodes: `274`
+- daily qualifying rows: `58,343`
+- review confidence counts: `44 established`, `122 confirmed`, `108 developing`
 - review status counts: `33 accelerating`, `87 confirmed`, `42 onset`,
   `90 cooling`, `24 unwinding`
 - unique review symbols: `230`
@@ -280,7 +280,7 @@ Outputs:
   stock-report sessions.
 - Absolute net-buy gates can favor higher-liquidity stocks. The branch share and
   purity gates reduce but do not eliminate this scale effect.
-- The 276-row review list is a behavior-review queue, not a trade list.
+- The 274-row review list is a behavior-review queue, not a trade list.
 
 #### Direction 1 Verification
 
@@ -305,7 +305,8 @@ from synchronous buying.
 
 ### Status
 
-`2026-06-21`: hypothesis and audit gates fixed; implementation not yet started.
+`2026-06-21`: completed, tested, and scanned across the locally available market
+data through `2026-06-17`.
 
 ### Hypothesis
 
@@ -396,3 +397,141 @@ These are interpretable starting gates, not return-optimized parameters.
 3. Write synthetic tests before scanning real data.
 4. Run a small symbol sample and inspect member-level evidence.
 5. Run the full market only after the dominance and parent-broker tests pass.
+
+### Direction 2 Implementation
+
+- Added `src/stockanalysis/analysis/distributed_branch_accumulation.py`.
+- Added deterministic tests in
+  `tests/test_distributed_branch_accumulation.py`.
+- Each member branch must independently pass short-window persistence, purity,
+  market-share, and trailing-history novelty gates before cluster aggregation.
+- Cluster gates enforce branch count, parent-broker count, combined purity,
+  combined market share, maximum member dominance, and residual evidence after
+  removing the largest member.
+- Reused Direction 1 broad-broker output to exclude `9268 / 凱基-台北` from
+  cluster membership. This dependency is visible in the summary output.
+- Adjacent cluster triggers merge only when they are close in stock-report
+  sessions and at least 50% of the smaller member set overlaps. This prevents
+  unrelated rotating branch groups from becoming one long episode.
+
+### Direction 2 Validation Failures and Fixes
+
+#### Rotating member sets
+
+The first six-symbol sample merged different branch groups whenever their dates
+were close. One 9136 episode accumulated dozens of unrelated member names. This
+was rejected because a long sequence of changing groups is not evidence of one
+distributed execution cluster. The 50% adjacent member-overlap rule was added,
+and a regression test now requires disjoint member sets to form separate
+episodes.
+
+#### Empty member table
+
+The first full-market run stopped before 250 symbols with:
+
+```text
+KeyError: 'member_qualifies'
+```
+
+Cause: stocks without any eligible local branches returned a columnless empty
+member table. `build_cluster_daily` now returns an empty cluster table before
+column access. A regression test covers this path.
+
+#### Institutional and non-local names
+
+The first completed full scan exposed `國票-敦北法人`, `第一金-國際證券`, and
+`犇亞-網路` in review candidates. This violated the local-branch hypothesis.
+The shared Direction 1 branch classifier was extended with `法人`, `國際證券`,
+and `網路`, then both Direction 1 and Direction 2 were rerun. Final review
+outputs contain zero names matching those terms.
+
+### Direction 2 Sample Run
+
+```bash
+PYTHONPATH=src .venv/bin/python -m stockanalysis.analysis.distributed_branch_accumulation \
+  --symbols 1532,2107,2705,1455,1460,9136 \
+  --end-date 2026-06-17 \
+  --output-dir outputs/analysis/distributed_branch_accumulation_sample
+```
+
+The final sample produced three review-eligible ongoing groups. The 1532 group
+was separate from the long single-branch event and met the distributed controls.
+
+### Direction 2 Final Full-Market Run
+
+```bash
+PYTHONPATH=src .venv/bin/python -m stockanalysis.analysis.distributed_branch_accumulation \
+  --end-date 2026-06-17
+```
+
+Final local-data results:
+
+- scanned stock symbols: `1,981`
+- historical episodes retained for audit: `4,681`
+- ongoing episodes: `306`
+- review-eligible ongoing episodes: `149`
+- daily qualifying cluster rows: `17,490`
+- review confidence counts: `4 established`, `28 confirmed`, `117 developing`
+- unique review symbols: `142`
+- excluded broad brokers: `9268 / 凱基-台北`
+- excluded `2317` and `2330` rows: `0`
+- review member names containing `法人`, `國際證券`, or `網路`: `0`
+
+Latest 1532 distributed episode:
+
+- rank: `111`
+- episode: `2026-06-15` through `2026-06-17`
+- confidence: `developing`
+- max branches: `5`
+- max parent brokers: `5`
+- latest cluster net buy: `1,781,113` shares
+- latest cluster buy share: `32.21%`
+- latest largest-member net share: `51.93%`
+- latest residual net buy after largest member: `856,213` shares
+
+This is evidence of a recent multi-branch accumulation pattern. It is not proof
+that the branches represent one beneficial owner.
+
+Outputs:
+
+- `outputs/analysis/distributed_branch_accumulation/distributed_branch_report.md`
+- `outputs/analysis/distributed_branch_accumulation/distributed_branch_summary.json`
+- `outputs/analysis/distributed_branch_accumulation/distributed_branch_episodes.csv`
+- `outputs/analysis/distributed_branch_accumulation/distributed_branch_episodes.parquet`
+- `outputs/analysis/distributed_branch_accumulation/distributed_branch_daily_triggers.parquet`
+
+### Direction 2 Known Limitations
+
+- Member overlap preserves a changing cluster core but does not identify account
+  ownership or order routing relationships.
+- Parent brokerage diversity reduces one-firm campaign noise but does not prove
+  independent information sources.
+- Member lists in long episodes are unions across qualifying dates and may be
+  larger than the latest active set. Daily trigger parquet is the authoritative
+  source for exact date membership.
+- Absolute member and cluster net-buy gates still introduce liquidity scale
+  effects.
+- The 149-row review list is a behavior-review queue, not a trade list.
+
+### Direction 2 Verification
+
+```bash
+.venv/bin/python -m py_compile \
+  src/stockanalysis/analysis/distributed_branch_accumulation.py \
+  tests/test_distributed_branch_accumulation.py
+.venv/bin/python -m unittest \
+  tests.test_single_branch_persistent_accumulation \
+  tests.test_distributed_branch_accumulation
+```
+
+Result: nine tests passed across the two completed directions. Direction 2
+coverage includes valid independent clusters, dominant-member rejection,
+single-parent rejection, one-day burst rejection, member-set episode splitting,
+and empty-member handling.
+
+### Next Resume Point
+
+Directions 1 and 2 are complete. Direction 3 is regional branch clustering near
+company locations. Before implementation, locate or build auditable company and
+broker address data. Do not infer geography from branch names alone when an
+address is available.

@@ -50,6 +50,9 @@ class SingleBranchPersistentAccumulationTest(unittest.TestCase):
         self.assertFalse(is_local_branch_name("元大-總公司"))
         self.assertFalse(is_local_branch_name("元富-營業"))
         self.assertFalse(is_local_branch_name("測試-法人部"))
+        self.assertFalse(is_local_branch_name("國票-敦北法人"))
+        self.assertFalse(is_local_branch_name("第一金-國際證券"))
+        self.assertFalse(is_local_branch_name("犇亞-網路"))
 
     def test_dormant_pair_becomes_one_persistent_episode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
