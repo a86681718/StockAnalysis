@@ -300,3 +300,99 @@ Direction 1 is complete. Start Direction 2 only after reading this log. Directio
 2 must detect multiple branches that may represent one distributed capital
 source. It must not alter Direction 1 outputs or infer common ownership merely
 from synchronous buying.
+
+## Direction 2: Distributed Multi-Branch Accumulation
+
+### Status
+
+`2026-06-21`: hypothesis and audit gates fixed; implementation not yet started.
+
+### Hypothesis
+
+Several independently identified local broker branches can begin unusual buying
+of the same stock within a short interval and continue accumulating together.
+The observable event is coordinated-looking execution across branches. The data
+cannot establish that the branches belong to one beneficial owner or controlling
+capital source.
+
+### Fixed Scope
+
+- Stock-side broker transactions only.
+- Multiple local branches for one underlying stock.
+- No company-location or geographic-distance requirement; that belongs to
+  Direction 3.
+- No warrants; stock/warrant convergence belongs to Direction 4.
+- No prices, returns, entries, exits, or parameter selection based on outcomes.
+- Reuse Direction 1 local-desk and explicit mega-cap exclusions.
+- Do not modify or merge Direction 1 episode outputs.
+
+### Required Member Evidence
+
+Each branch included in a distributed cluster must independently show recent
+behavioral change relative to its own branch-stock history. Lower per-branch
+market-share gates may be used than Direction 1 because distributed execution is
+expected to split size, but a branch cannot qualify only because other branches
+are buying.
+
+Candidate member dimensions:
+
+- recent positive-net sessions;
+- branch-level net-buy purity;
+- recent buying relative to trailing branch-stock activity;
+- first unusual-buy date;
+- local branch identity and parent broker name;
+- broad cross-stock broker flag.
+
+### Required Cluster Evidence
+
+- At least three qualifying local branches.
+- At least two distinct parent brokerage firms.
+- Member onset dates concentrated within a short synchronization interval.
+- Meaningful combined net buying and combined share of stock buy volume.
+- High combined net-buy purity.
+- The largest branch must not dominate the cluster.
+- Removing the largest branch must leave economically meaningful net buying and
+  market participation.
+- Persistent evidence across several stock-report sessions, not one block day.
+
+Initial calibration references, subject to behavior-only review:
+
+- short window: 5 sessions;
+- long window: 20 sessions;
+- minimum member positive sessions: 2 of 5;
+- minimum cluster branches: 3;
+- minimum parent brokers: 2;
+- maximum largest-branch share of cluster net buying: 60%;
+- cluster net-buy purity: at least 80%;
+- cluster buy share of stock reported buy volume: at least 10%.
+
+These are interpretable starting gates, not return-optimized parameters.
+
+### Main False Positives to Reject
+
+- One dominant Direction 1 branch plus several trivial buyers.
+- Multiple branches of one broker responding to the same internal sales campaign.
+- A generally active broad-market branch appearing in many stocks.
+- Tiny illiquid prints that create high percentages with little economic size.
+- Broad market participation where many unrelated branches are mechanically on
+  both sides without unusual branch-level behavior.
+- Consecutive daily rows from one cluster incorrectly counted as separate events.
+
+### Direction 2 Acceptance Checks
+
+- Synthetic coordinated cluster passes.
+- Synthetic one-dominant-branch cluster fails after largest-branch removal.
+- Three branches from only one parent brokerage fail.
+- One-day distributed block buying fails persistence.
+- Output exposes member branches, parent brokers, first trigger dates, combined
+  metrics, dominance, and exact gate values.
+- Full-market output remains a behavior-review queue and contains no future-return
+  columns.
+
+### Direction 2 Resume Point
+
+1. Read Direction 1 implementation for loading and branch-name normalization.
+2. Build a separate module and output folder for Direction 2.
+3. Write synthetic tests before scanning real data.
+4. Run a small symbol sample and inspect member-level evidence.
+5. Run the full market only after the dominance and parent-broker tests pass.
