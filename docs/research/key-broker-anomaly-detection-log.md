@@ -10,8 +10,8 @@ not be used to define an event.
 ## Research Order
 
 1. Single local-branch persistent accumulation (completed 2026-06-21)
-2. Multiple branches used by one possible capital source (pending)
-3. Regional branch clustering near company locations (pending)
+2. Multiple branches used by one possible capital source (completed 2026-06-21)
+3. Regional branch clustering near company locations (completed 2026-06-21)
 4. Stock and warrant joint accumulation (pending)
 5. Warrant-leading-stock accumulation (pending)
 
@@ -535,3 +535,150 @@ Directions 1 and 2 are complete. Direction 3 is regional branch clustering near
 company locations. Before implementation, locate or build auditable company and
 broker address data. Do not infer geography from branch names alone when an
 address is available.
+
+## Direction 3: Regional Branch Clustering
+
+### Status
+
+`2026-06-21`: completed as a same-registered-city detector using official company
+address snapshots and broker-list addresses.
+
+### Fixed Interpretation
+
+The detector answers whether independently abnormal branches in the company's
+registered city are accumulating together more strongly than that city's own
+historical participation in the stock. It does not claim physical proximity,
+employee trading, local information, insider behavior, or common ownership.
+
+Registered address is not necessarily headquarters, factory, or principal
+operating location. Exact 10/25/50 km detection remains a later extension that
+requires geocoded operating-location data.
+
+### Address Sources
+
+- TWSE official OpenAPI:
+  `https://openapi.twse.com.tw/v1/opendata/t187ap03_L`
+- TPEx official OpenAPI:
+  `https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O`
+- Local broker addresses: `data/broker_list.csv`
+
+Saved snapshots:
+
+- `data/reference/company_profiles_twse.json`
+- `data/reference/company_profiles_tpex.json`
+
+Refresh command:
+
+```bash
+.venv/bin/python apps/etl/refresh_company_profiles.py
+```
+
+The TWSE snapshot had 1,090 rows and Chinese address fields. The TPEx snapshot
+had 890 rows and English address fields. City normalization handles `台/臺`, old
+county names, and English city/county names.
+
+### Implementation
+
+- Added `src/stockanalysis/analysis/regional_branch_accumulation.py`.
+- Added tests in `tests/test_regional_branch_accumulation.py`.
+- Reused Direction 2 member-level anomaly, parent-broker, dominance, residual,
+  broad-broker, and episode-overlap controls.
+- Restricted members using broker address city, not branch-name text.
+- Required at least two branches from two parent brokerages.
+- Added city buy-share lift: the company's city must have at least 1.5 times its
+  trailing 60-session stock-specific baseline and at least 3 percentage points
+  of absolute share increase.
+
+### 2474 Calibration Finding
+
+Official registered address: `台南市永康區仁愛街398號`.
+
+The local data contains 61 identifiable Tainan branches trading 2474. From
+October through November 2025, `富邦-台南` showed a strong single-branch event:
+
+- five-session net buying rose above 4 million shares at its peak;
+- net-buy purity was near 100%;
+- branch buy share exceeded 30% at its peak.
+
+However, only `永豐金-永康` briefly joined on `2025-10-20`. The two-branch group
+had 4.38% stock buy share, below the 5% regional gate, while `富邦-台南` supplied
+74.23% of group net buying. The event therefore remains a single local-branch
+case and does not pass the multi-branch regional detector. Thresholds were not
+relaxed to force the expected example to pass.
+
+### Rejected First Full-Market Result
+
+The first same-city scan produced 46 review candidates, including 32 registered
+in Taipei City. This was rejected because same-city matching alone inherited the
+large Taipei broker population and did not demonstrate a location-specific
+increase.
+
+The city-specific historical baseline was then added. A regression test verifies
+that current city participation must rise above its own prior share.
+
+### Final Full-Market Run
+
+```bash
+PYTHONPATH=src .venv/bin/python -m stockanalysis.analysis.regional_branch_accumulation \
+  --end-date 2026-06-17
+```
+
+Final local-data results:
+
+- historical episodes retained for audit: `576`
+- ongoing episodes: `37`
+- review-eligible ongoing episodes: `9`
+- review confidence: `1 confirmed`, `8 developing`
+- city distribution: `台中市 3`, `台北市 3`, `台南市 1`, `高雄市 1`, `新竹市 1`
+
+Review queue:
+
+1. `7721 微程式 / 台中市 / confirmed`
+2. `4166 友霖 / 台北市 / developing`
+3. `6598 ABC-KY / 台北市 / developing`
+4. `8201 無敵 / 台北市 / developing`
+5. `2017 官田鋼 / 台南市 / developing`
+6. `8933 愛地雅 / 台中市 / developing`
+7. `1432 大魯閣 / 台中市 / developing`
+8. `1436 華友聯 / 高雄市 / developing`
+9. `2480 敦陽科 / 新竹市 / developing`
+
+Outputs:
+
+- `outputs/analysis/regional_branch_accumulation/regional_branch_report.md`
+- `outputs/analysis/regional_branch_accumulation/regional_branch_summary.json`
+- `outputs/analysis/regional_branch_accumulation/regional_branch_episodes.parquet`
+- `outputs/analysis/regional_branch_accumulation/regional_branch_daily_triggers.parquet`
+
+### Plain-Language Overview
+
+Added `apps/analysis/build_key_broker_anomaly_overview.py`, which combines the
+three completed detectors into:
+
+- `outputs/analysis/key_broker_anomaly_overview.md`
+
+It explains detector meanings, confidence labels, 1532, 2474, current counts,
+top candidates, and conclusions that cannot be drawn from the data.
+
+### Direction 3 Verification
+
+```bash
+.venv/bin/python -m py_compile \
+  src/stockanalysis/analysis/regional_branch_accumulation.py \
+  apps/analysis/build_key_broker_anomaly_overview.py
+.venv/bin/python -m unittest \
+  tests.test_single_branch_persistent_accumulation \
+  tests.test_distributed_branch_accumulation \
+  tests.test_regional_branch_accumulation
+```
+
+Tests cover city parsing, old county normalization, English TPEx addresses,
+company-city member filtering, missing-city handling, and city-share baseline
+lift. Existing Direction 1 and 2 tests remain part of the verification set.
+
+### Next Resume Point
+
+Directions 1 through 3 are complete. Direction 4 is stock and warrant joint
+accumulation. Before implementation, define warrant-side exclusions for issuers,
+market makers, expiry effects, call/put direction, and delta-equivalent exposure.
+Do not add warrant volume directly to stock shares.
