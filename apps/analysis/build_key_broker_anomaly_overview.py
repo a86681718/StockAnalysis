@@ -57,10 +57,29 @@ def _regional_rows(frame: pd.DataFrame, limit: int = 15) -> list[str]:
     return rows
 
 
+def _general_rows(frame: pd.DataFrame, limit: int = 10) -> list[str]:
+    labels = {
+        "concentrated_surge": "集中突增",
+        "distributed_surge": "分散突增",
+        "breadth_expansion": "買方廣度擴張",
+        "mixed_accumulation": "混合累積",
+    }
+    rows = []
+    for row in frame.head(limit).itertuples(index=False):
+        rows.append(
+            f"| {row.review_rank} | {row.symbol} | {labels.get(row.dominant_pattern, row.dominant_pattern)} | "
+            f"{pd.Timestamp(row.episode_start).date()} | {pd.Timestamp(row.last_qualifying_date).date()} | "
+            f"{row.qualifying_dates} | {row.max_pressure_multiple:.2f}x | {_number(row.max_recent_net_buy)} | "
+            f"{_pct(row.max_buy_participation)} | {row.latest_top_buyer} |"
+        )
+    return rows
+
+
 def main() -> int:
     single = _read(OUTPUT_ROOT / "single_branch_persistent_accumulation" / "single_branch_persistent_episodes.parquet")
     distributed = _read(OUTPUT_ROOT / "distributed_branch_accumulation" / "distributed_branch_episodes.parquet")
     regional = _read(OUTPUT_ROOT / "regional_branch_accumulation" / "regional_branch_episodes.parquet")
+    general = _read(OUTPUT_ROOT / "general_broker_flow_anomaly" / "general_broker_flow_anomaly_review_cases.parquet")
 
     single_review = single[single["review_eligible"]] if not single.empty else single
     distributed_review = distributed[distributed["review_eligible"]] if not distributed.empty else distributed
@@ -73,13 +92,14 @@ def main() -> int:
         "",
         "> 這些是異常行為觀察清單，不是買進建議。偵測條件沒有使用事件後股價或報酬。",
         "",
-        "## 先看懂三個方向",
+        "## 先看懂四個方向",
         "",
         "| 方向 | 回答的問題 | 目前 review 數 |",
         "|---|---|---:|",
         f"| 單一分點長期累積 | 哪一個地區分點持續、近乎只買不賣？ | {len(single_review)} |",
         f"| 多分點分散累積 | 是否有多家券商分點同時異常買進，且不是單一分點撐起來？ | {len(distributed_review)} |",
         f"| 公司所在地群聚 | 公司登記縣市內的分點是否共同異常，且高於該地區過去基準？ | {len(regional_review)} |",
+        f"| 通用分點流異常 | 不預設券商、地區或集中型態，哪些股票的五日買壓相對自身歷史異常？ | {len(general)} |",
         "",
         "## 狀態怎麼看",
         "",
@@ -132,6 +152,15 @@ def main() -> int:
         "| 排名 | 股票 | 公司縣市 | 層級 | 開始日 | 最大分點數 | 最新淨買股數 | 買量占比 | 相對歷史地區占比 |",
         "|---:|---|---|---|---|---:|---:|---:|---:|",
         *_regional_rows(regional),
+        "",
+        "## 通用分點流異常 Top 10",
+        "",
+        "這一方向不使用指定股票、券商、公司地區或未來報酬。每檔股票以自身過去 60 個分點報告日為基準，",
+        "最近 5 日正向分點壓力必須超過歷史 95 分位，且至少連續出現 3 個 qualifying dates 才形成案例。",
+        "",
+        "| 排名 | 股票 | 型態 | 開始日 | 最後合格日 | 合格日數 | 壓力倍數 | 五日淨買壓 | 買量參與 | 主要買方 |",
+        "|---:|---|---|---|---|---:|---:|---:|---:|---|",
+        *_general_rows(general),
         "",
         "## 目前不能下的結論",
         "",

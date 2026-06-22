@@ -15,6 +15,10 @@ not be used to define an event.
 4. Stock and warrant joint accumulation (pending)
 5. Warrant-leading-stock accumulation (pending)
 
+Cross-cutting work may add a general stock-side anomaly framework, but it must
+remain separate from these hypothesis-specific directions and may not use
+future returns to choose cases.
+
 Do not combine pending directions into the first detector. They require separate
 hypotheses, features, validation cases, and output artifacts.
 
@@ -682,3 +686,123 @@ Directions 1 through 3 are complete. Direction 4 is stock and warrant joint
 accumulation. Before implementation, define warrant-side exclusions for issuers,
 market makers, expiry effects, call/put direction, and delta-equivalent exposure.
 Do not add warrant volume directly to stock shares.
+
+## Cross-Cutting General Broker-Flow Anomaly Framework
+
+### Status
+
+`2026-06-22`: implemented, tested, scanned across the full local stock universe,
+and validated against raw broker parquet.
+
+### Why This Framework Was Added
+
+The first three completed directions are useful but hypothesis-specific. They
+encode assumptions about one persistent local branch, several synchronized
+local branches, or branches in the company's registered city. A general detector
+must not require any of those structures.
+
+The new framework therefore:
+
+- accepts mapped and unmapped execution branches without a broker allowlist;
+- does not require a local branch suffix or company-location match;
+- does not exclude mega-cap symbols by name;
+- allows concentrated, distributed, mixed, and breadth-expansion behavior;
+- compares each stock only with its own trailing broker-flow history;
+- does not load OHLC, future prices, returns, entries, exits, or labels.
+
+### Market-Structure Correction During Smoke Testing
+
+The first implementation incorrectly gated on net buying summed over every
+broker in one stock. That quantity is structurally near zero because broker-side
+buying and selling are the two sides of the same market. A 100-symbol smoke run
+correctly produced zero cases and exposed the invalid aggregation.
+
+The implementation was corrected instead of weakening thresholds. For every
+stock and five-report-session window, transactions are now aggregated by broker
+first. The detector then measures only brokers whose five-session net flow is
+positive:
+
+- positive broker pressure: sum of positive broker window net flows;
+- buyer retention: positive pressure divided by those brokers' buy volume;
+- buy participation: positive pressure divided by all reported stock buy volume;
+- persistence: maximum positive-net sessions among current positive brokers;
+- concentration: top positive broker share and positive-flow HHI;
+- breadth: count of positive brokers and change from the trailing baseline.
+
+### Prospective Event Gate
+
+For one stock-date to qualify, all conditions must hold:
+
+- five-session positive pressure is at or above its prior 60-session 95th percentile;
+- pressure is at least 1.5 times the prior rolling median;
+- at least one current positive broker bought net on three of five sessions;
+- positive-broker retention is at least 50%;
+- positive pressure is at least 8% of total reported stock buy volume.
+
+Historical thresholds are shifted by one report session. The current observation
+cannot alter its own baseline. Adjacent triggers within five report sessions are
+merged, and an episode requires at least three qualifying dates. The formal
+review queue keeps only the highest-severity episode per symbol, so case counts
+cannot be inflated by repeated dates or several episodes in the same stock.
+
+### Automatic Behavior Types
+
+- `concentrated_surge`: one positive broker supplies at least 55% of pressure.
+- `distributed_surge`: top share is at most 35% and at least five positive brokers participate.
+- `breadth_expansion`: HHI falls by at least 0.05 while buyer breadth rises at least 25%.
+- `mixed_accumulation`: a valid anomaly that does not fit the three shapes above.
+
+These are descriptions of observable execution shape, not claims about common
+ownership, information advantage, or future returns.
+
+### Full-Market Run
+
+```bash
+PYTHONPATH=src .venv/bin/python -m stockanalysis.analysis.general_broker_flow_anomaly \
+  --end-date 2026-06-19
+```
+
+Results:
+
+- scanned stock symbols: `1,983`
+- distinct episodes: `3,812`
+- unique symbols with an episode: `1,607`
+- one-per-symbol review cases: `1,607`
+- daily qualifying rows: `23,982`
+- dominant episode types: `2,831 distributed`, `437 breadth expansion`,
+  `319 mixed`, and `225 concentrated`
+
+The requested minimum of 50 source-backed cases is satisfied by the first 50
+rows of the one-per-symbol review output. They represent 50 different stocks,
+not 50 daily observations.
+
+Outputs:
+
+- `outputs/analysis/general_broker_flow_anomaly/general_broker_flow_anomaly_report.md`
+- `outputs/analysis/general_broker_flow_anomaly/general_broker_flow_anomaly_summary.json`
+- `outputs/analysis/general_broker_flow_anomaly/general_broker_flow_anomaly_review_cases.csv`
+- `outputs/analysis/general_broker_flow_anomaly/general_broker_flow_anomaly_review_cases.parquet`
+- `outputs/analysis/general_broker_flow_anomaly/general_broker_flow_anomaly_episodes.parquet`
+- `outputs/analysis/general_broker_flow_anomaly/general_broker_flow_anomaly_daily_triggers.parquet`
+
+### Verification
+
+- two deterministic unit tests pass: shifted historical baseline plus sustained
+  surge detection, and adjacent-trigger episode deduplication;
+- all `23,982` saved triggers pass every configured gate;
+- all `1,607` review rows have unique symbols and at least three qualifying dates;
+- top 10 review cases were rebuilt directly from raw parquet; positive pressure,
+  buyer retention, and participation match saved trigger rows exactly;
+- no price or return column exists in detector inputs or ranking outputs.
+
+### Known Limitations
+
+- Broker codes identify execution channels, not beneficial owners.
+- A 95th-percentile self-history gate intentionally finds anomalies in both
+  liquid and illiquid stocks; review rank is not a liquidity or tradability rank.
+- Unmapped broker codes remain visible instead of being silently excluded.
+- The framework detects broad positive-flow regimes and may surface normal
+  institutional rebalancing. Event interpretation still requires manual review.
+- The 1,607-case review queue is intentionally broad. The top 50 are evidence
+  that the framework finds real source-backed cases, not a claim that all 1,607
+  cases are equally important.
