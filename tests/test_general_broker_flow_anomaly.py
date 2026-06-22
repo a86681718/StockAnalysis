@@ -68,11 +68,20 @@ class GeneralBrokerFlowAnomalyTests(unittest.TestCase):
                 "top_buyer": ["", "A", "A", "B", ""],
                 "recent_buyer_names": ["", "A,B", "A,B,C", "A,B,C,D", ""],
             })
-            episodes, triggers = build_episodes(features, cfg)
+            raw = pd.DataFrame({
+                "date": pd.to_datetime(["2026-01-02", "2026-01-03", "2026-01-04", "2026-01-04"]),
+                "broker": ["A", "A", "A", "B"],
+                "broker_name": ["Alpha", "Alpha", "Alpha", "Beta"],
+                "buy_volume": [100, 100, 100, 150],
+                "sell_volume": [0, 0, 0, 0],
+            })
+            episodes, triggers = build_episodes(features, cfg, raw)
             self.assertEqual(len(triggers), 3)
             self.assertEqual(len(episodes), 1)
             self.assertEqual(int(episodes.iloc[0]["qualifying_dates"]), 3)
             self.assertEqual(episodes.iloc[0]["dominant_pattern"], "distributed_surge")
+            self.assertEqual(episodes.iloc[0]["primary_buyer"], "Alpha")
+            self.assertEqual(episodes.iloc[0]["latest_window_top_buyer"], "B")
 
 
 if __name__ == "__main__":

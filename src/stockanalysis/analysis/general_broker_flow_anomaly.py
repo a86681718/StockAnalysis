@@ -159,7 +159,11 @@ def classify_pattern(row: pd.Series) -> str:
     return "mixed_accumulation"
 
 
-def build_episodes(features: pd.DataFrame, cfg: GeneralAnomalyConfig) -> tuple[pd.DataFrame, pd.DataFrame]:
+def build_episodes(
+    features: pd.DataFrame,
+    cfg: GeneralAnomalyConfig,
+    raw: Optional[pd.DataFrame] = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     triggers = features[features["qualifies"]].copy().sort_values("date").reset_index(drop=True)
     if triggers.empty:
         return pd.DataFrame(), triggers
@@ -180,6 +184,27 @@ def build_episodes(features: pd.DataFrame, cfg: GeneralAnomalyConfig) -> tuple[p
             continue
         latest = group.iloc[-1]
         pattern_counts = group["pattern"].value_counts()
+        primary_buyer = latest["top_buyer"]
+        primary_buyer_net_buy = np.nan
+        primary_buyer_share = np.nan
+        if raw is not None and not raw.empty:
+            episode_raw = raw[
+                (raw["date"] >= pd.Timestamp(group.iloc[0]["date"]))
+                & (raw["date"] <= pd.Timestamp(latest["date"]))
+            ]
+            broker_totals = episode_raw.groupby(["broker", "broker_name"], as_index=False).agg(
+                buy_volume=("buy_volume", "sum"), sell_volume=("sell_volume", "sum")
+            )
+            broker_totals["net_buy"] = broker_totals["buy_volume"] - broker_totals["sell_volume"]
+            positive_totals = broker_totals[broker_totals["net_buy"] > 0].sort_values(
+                "net_buy", ascending=False
+            )
+            if not positive_totals.empty:
+                primary = positive_totals.iloc[0]
+                positive_total = float(positive_totals["net_buy"].sum())
+                primary_buyer = primary["broker_name"]
+                primary_buyer_net_buy = float(primary["net_buy"])
+                primary_buyer_share = primary_buyer_net_buy / positive_total if positive_total > 0 else np.nan
         severity = (
             np.log1p(float(group["pressure_multiple"].max()))
             * float(group["buyer_retention"].median())
@@ -202,7 +227,10 @@ def build_episodes(features: pd.DataFrame, cfg: GeneralAnomalyConfig) -> tuple[p
                 "max_buyer_union_count": int(group["recent_buyer_union_count"].max()),
                 "min_mean_top_share": float(group["recent_mean_top_share"].min()),
                 "max_mean_top_share": float(group["recent_mean_top_share"].max()),
-                "latest_top_buyer": latest["top_buyer"],
+                "primary_buyer": primary_buyer,
+                "primary_buyer_net_buy": primary_buyer_net_buy,
+                "primary_buyer_share": primary_buyer_share,
+                "latest_window_top_buyer": latest["top_buyer"],
                 "buyer_names": latest["recent_buyer_names"],
                 "severity_score": float(severity),
             }
@@ -257,7 +285,7 @@ def write_outputs(
         "",
         "## Top 50 Episodes",
         "",
-        "| Rank | Symbol | Pattern | Start | Last | Trigger Days | Pressure Multiple | Net Buy | Participation | Top Buyer |",
+        "| Rank | Symbol | Pattern | Start | Last | Trigger Days | Pressure Multiple | Net Buy | Participation | Primary Buyer |",
         "|---:|---|---|---|---|---:|---:|---:|---:|---|",
     ]
     for row in top.itertuples(index=False):
@@ -265,7 +293,7 @@ def write_outputs(
             f"| {row.review_rank} | {row.symbol} | {row.dominant_pattern} | {pd.Timestamp(row.episode_start):%Y-%m-%d} | "
             f"{pd.Timestamp(row.last_qualifying_date):%Y-%m-%d} | {row.qualifying_dates} | "
             f"{row.max_pressure_multiple:.2f}x | {row.max_recent_net_buy:,.0f} | "
-            f"{row.max_buy_participation:.1%} | {row.latest_top_buyer} |"
+            f"{row.max_buy_participation:.1%} | {row.primary_buyer} |"
         )
     (cfg.output_dir / "general_broker_flow_anomaly_report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -321,7 +349,7 @@ def main() -> None:
         raw = load_symbol_daily(symbol, symbol_paths, lookup, cfg.start_date, cfg.end_date)
         features = build_features(build_window_metrics(raw, cfg), cfg)
         if not features.empty:
-            episodes, triggers = build_episodes(features, cfg)
+            episodes, triggers = build_episodes(features, cfg, raw)
             if not episodes.empty:
                 all_episodes.append(episodes)
             if not triggers.empty:

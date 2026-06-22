@@ -70,7 +70,7 @@ def _general_rows(frame: pd.DataFrame, limit: int = 10) -> list[str]:
             f"| {row.review_rank} | {row.symbol} | {labels.get(row.dominant_pattern, row.dominant_pattern)} | "
             f"{pd.Timestamp(row.episode_start).date()} | {pd.Timestamp(row.last_qualifying_date).date()} | "
             f"{row.qualifying_dates} | {row.max_pressure_multiple:.2f}x | {_number(row.max_recent_net_buy)} | "
-            f"{_pct(row.max_buy_participation)} | {row.latest_top_buyer} |"
+            f"{_pct(row.max_buy_participation)} | {row.primary_buyer} |"
         )
     return rows
 

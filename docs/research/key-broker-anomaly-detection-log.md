@@ -806,3 +806,26 @@ Outputs:
 - The 1,607-case review queue is intentionally broad. The top 50 are evidence
   that the framework finds real source-backed cases, not a claim that all 1,607
   cases are equally important.
+
+### 2026-06-22 Primary-Buyer Label Correction
+
+Manual review of `2254` found that the report's `latest_top_buyer` field was the
+largest positive broker in the final five-session window, not the largest buyer
+over the full episode. Calling it the episode's primary broker was incorrect.
+
+The episode output now stores both meanings explicitly:
+
+- `primary_buyer`: largest cumulative net buyer from episode start through the
+  last qualifying date;
+- `latest_window_top_buyer`: largest positive broker in the final five-session
+  qualifying window.
+
+For `2254 / 2025-12-26~2026-02-24`, the corrected values are:
+
+- episode primary buyer: `統一`, net buy `2,010,000`, positive-flow share `62.22%`;
+- latest-window top buyer: `國票-台中`, final-window net buy `542,000`.
+
+The full 1,983-symbol scan was rerun. Episode and review counts remained `3,812`
+and `1,607`, confirming that the correction changes broker attribution rather
+than event detection. A regression test covers an episode where the full-period
+primary buyer differs from the final-window top buyer.
