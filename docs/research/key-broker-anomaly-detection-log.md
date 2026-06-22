@@ -791,7 +791,7 @@ Outputs:
   surge detection, and adjacent-trigger episode deduplication;
 - all `23,982` saved triggers pass every configured gate;
 - all `1,607` review rows have unique symbols and at least three qualifying dates;
-- top 10 review cases were rebuilt directly from raw parquet; positive pressure,
+- top 50 review cases were rebuilt directly from raw parquet; positive pressure,
   buyer retention, and participation match saved trigger rows exactly;
 - no price or return column exists in detector inputs or ranking outputs.
 
