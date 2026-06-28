@@ -807,6 +807,21 @@ Outputs:
   that the framework finds real source-backed cases, not a claim that all 1,607
   cases are equally important.
 
+### 2026-06-28 Multi-Day and Price-Position Filter Refinement
+
+The general broker-flow anomaly detector now adds two gates to reduce lower
+quality review cases:
+
+- accumulation pressure must be split across at least three days in the recent
+  window, and no single day may contribute more than 65% of the window's
+  positive pressure;
+- pressure-weighted buying must occur at or below the 65th percentile of the
+  trailing 60-session high-low range.
+
+The price context comes from `data/_derived/ohlc.parquet` and uses same-day plus
+trailing data only. It is a review-quality filter for avoiding single-day spikes
+and chase-high cases, not a forward-return or outcome-based ranking.
+
 ### 2026-06-22 Primary-Buyer Label Correction
 
 Manual review of `2254` found that the report's `latest_top_buyer` field was the

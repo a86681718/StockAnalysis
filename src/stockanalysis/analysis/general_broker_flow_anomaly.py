@@ -1,7 +1,8 @@
 """Detect broad stock-side broker-flow accumulation anomalies.
 
 The detector compares each stock with its own trailing broker-flow history. It
-does not use prices, future returns, company locations, or broker allowlists.
+uses only same-day and trailing price context. It does not use future returns,
+company locations, or broker allowlists.
 """
 
 from __future__ import annotations
@@ -43,6 +44,11 @@ class GeneralAnomalyConfig:
     min_buyer_retention: float
     min_buy_participation: float
     min_pressure_multiple: float
+    min_pressure_days: int
+    max_single_day_pressure_share: float
+    ohlc_path: Path
+    price_window: int
+    max_price_position: float
     episode_gap_sessions: int
     min_episode_triggers: int
 
@@ -69,14 +75,64 @@ def load_symbol_daily(
     return raw.sort_values(["date", "broker"]).reset_index(drop=True)
 
 
-def build_window_metrics(raw: pd.DataFrame, cfg: GeneralAnomalyConfig) -> pd.DataFrame:
+def load_price_context(
+    path: Path,
+    symbols: set[str],
+    start_date: Optional[pd.Timestamp],
+    end_date: Optional[pd.Timestamp],
+    price_window: int,
+) -> pd.DataFrame:
+    if not path.exists() or not symbols:
+        return pd.DataFrame()
+    ohlc = pd.read_parquet(path, columns=["symbol", "date", "high", "low", "close"])
+    if ohlc.empty:
+        return ohlc
+    ohlc["symbol"] = ohlc["symbol"].astype(str)
+    ohlc["date"] = pd.to_datetime(ohlc["date"], errors="coerce").dt.normalize()
+    ohlc = ohlc[ohlc["symbol"].isin(symbols) & ohlc["date"].notna()].copy()
+    if start_date is not None:
+        ohlc = ohlc[ohlc["date"] >= start_date]
+    if end_date is not None:
+        ohlc = ohlc[ohlc["date"] <= end_date]
+    if ohlc.empty:
+        return ohlc
+    for col in ("high", "low", "close"):
+        ohlc[col] = pd.to_numeric(ohlc[col], errors="coerce")
+    ohlc = ohlc.sort_values(["symbol", "date"]).reset_index(drop=True)
+    grouped = ohlc.groupby("symbol", group_keys=False)
+    rolling_low = grouped["low"].transform(lambda s: s.rolling(price_window, min_periods=10).min())
+    rolling_high = grouped["high"].transform(lambda s: s.rolling(price_window, min_periods=10).max())
+    price_range = rolling_high - rolling_low
+    ohlc["price_position"] = (ohlc["close"] - rolling_low) / price_range.replace(0, np.nan)
+    return ohlc[["symbol", "date", "close", "price_position"]]
+
+
+def build_window_metrics(
+    raw: pd.DataFrame,
+    cfg: GeneralAnomalyConfig,
+    price_context: Optional[pd.DataFrame | dict[str, pd.DataFrame]] = None,
+) -> pd.DataFrame:
     if raw.empty:
         return pd.DataFrame()
+    price_by_date = pd.DataFrame()
+    if price_context is not None:
+        symbol = str(raw["symbol"].iloc[0])
+        if isinstance(price_context, dict):
+            price_by_date = price_context.get(symbol, pd.DataFrame())
+        else:
+            price_by_date = price_context[price_context["symbol"] == symbol].set_index("date")
     dates = pd.DatetimeIndex(raw["date"].dropna().sort_values().unique())
     rows: list[dict[str, object]] = []
     for end_index in range(cfg.recent_window - 1, len(dates)):
         window_dates = dates[end_index - cfg.recent_window + 1 : end_index + 1]
         window = raw[raw["date"].isin(window_dates)]
+        daily_pressure = (
+            window.assign(positive_net=lambda frame: frame["net_buy"].clip(lower=0))
+            .groupby("date", as_index=False)["positive_net"]
+            .sum()
+            .rename(columns={"positive_net": "daily_positive_pressure"})
+        )
+        pressure_days = daily_pressure[daily_pressure["daily_positive_pressure"] > 0]
         broker_window = window.groupby(["broker", "broker_name"], as_index=False).agg(
             buy_volume=("buy_volume", "sum"), sell_volume=("sell_volume", "sum")
         )
@@ -93,6 +149,28 @@ def build_window_metrics(raw: pd.DataFrame, cfg: GeneralAnomalyConfig) -> pd.Dat
         )
         names = buyers["broker_name"].astype(str).head(10).tolist()
         buyer_buy_volume = float(buyers["buy_volume"].sum())
+        max_daily_pressure = (
+            float(daily_pressure["daily_positive_pressure"].max()) if not daily_pressure.empty else 0.0
+        )
+        max_single_day_pressure_share = (
+            max_daily_pressure / positive_pressure if positive_pressure > 0 else np.nan
+        )
+        price_position = np.nan
+        latest_close = np.nan
+        if not price_by_date.empty:
+            price_window = price_by_date.reindex(window_dates)
+            if "close" in price_window:
+                latest_close = (
+                    float(price_window["close"].dropna().iloc[-1])
+                    if price_window["close"].notna().any()
+                    else np.nan
+                )
+            if "price_position" in price_window and not pressure_days.empty:
+                weights = pressure_days.set_index("date")["daily_positive_pressure"]
+                aligned = price_window["price_position"].reindex(weights.index).dropna()
+                weights = weights.reindex(aligned.index)
+                if len(aligned) and float(weights.sum()) > 0:
+                    price_position = float(np.average(aligned, weights=weights))
         rows.append(
             {
                 "symbol": raw["symbol"].iloc[0],
@@ -104,6 +182,10 @@ def build_window_metrics(raw: pd.DataFrame, cfg: GeneralAnomalyConfig) -> pd.Dat
                 "recent_mean_buyer_count": float(len(buyers)),
                 "recent_mean_top_share": float(shares.iloc[0]) if len(shares) else np.nan,
                 "recent_mean_hhi": float((shares**2).sum()) if len(shares) else np.nan,
+                "recent_pressure_days": int(len(pressure_days)),
+                "max_single_day_pressure_share": float(max_single_day_pressure_share),
+                "recent_price_position": price_position,
+                "latest_close": latest_close,
                 "recent_buyer_names": ",".join(names),
                 "recent_buyer_union_count": len(buyers),
                 "top_buyer": names[0] if names else "",
@@ -140,6 +222,9 @@ def build_features(frame: pd.DataFrame, cfg: GeneralAnomalyConfig) -> pd.DataFra
         & (frame["recent_positive_pressure"] >= frame["baseline_pressure_threshold"])
         & (frame["pressure_multiple"] >= cfg.min_pressure_multiple)
         & (frame["recent_positive_days"] >= cfg.min_positive_days)
+        & (frame["recent_pressure_days"] >= cfg.min_pressure_days)
+        & (frame["max_single_day_pressure_share"] <= cfg.max_single_day_pressure_share)
+        & (frame["recent_price_position"] <= cfg.max_price_position)
         & (frame["buyer_retention"] >= cfg.min_buyer_retention)
         & (frame["buy_participation"] >= cfg.min_buy_participation)
     )
@@ -224,6 +309,10 @@ def build_episodes(
                 "max_recent_net_buy": float(group["recent_net_buy"].max()),
                 "median_buyer_retention": float(group["buyer_retention"].median()),
                 "max_buy_participation": float(group["buy_participation"].max()),
+                "median_pressure_days": float(group["recent_pressure_days"].median()),
+                "max_single_day_pressure_share": float(group["max_single_day_pressure_share"].max()),
+                "median_price_position": float(group["recent_price_position"].median()),
+                "latest_close": float(latest["latest_close"]),
                 "max_buyer_union_count": int(group["recent_buyer_union_count"].max()),
                 "min_mean_top_share": float(group["recent_mean_top_share"].min()),
                 "max_mean_top_share": float(group["recent_mean_top_share"].max()),
@@ -274,26 +363,31 @@ def write_outputs(
     lines = [
         "# General Broker-Flow Anomaly Report",
         "",
-        "> Detection-only output. No price, return, or future outcome is used.",
+        "> Detection-only output. Uses same-day and trailing price context; no future outcome is used.",
         "",
         f"- scanned symbols: `{scanned_symbols}`",
         f"- distinct episodes: `{len(episodes)}`",
         f"- unique symbols: `{summary['unique_symbols']}`",
         f"- one-per-symbol review cases: `{summary['review_case_count']}`",
         f"- daily triggers: `{len(triggers)}`",
+        f"- minimum pressure days: `{cfg.min_pressure_days}`",
+        f"- maximum single-day pressure share: `{cfg.max_single_day_pressure_share:.0%}`",
+        f"- maximum weighted {cfg.price_window}-session price position: `{cfg.max_price_position:.0%}`",
         f"- pattern counts: `{json.dumps(summary['pattern_counts'], ensure_ascii=False)}`",
         "",
         "## Top 50 Episodes",
         "",
-        "| Rank | Symbol | Pattern | Start | Last | Trigger Days | Pressure Multiple | Net Buy | Participation | Primary Buyer |",
-        "|---:|---|---|---|---|---:|---:|---:|---:|---|",
+        "| Rank | Symbol | Pattern | Start | Last | Trigger Days | Pressure Multiple | Net Buy | Participation | Pressure Days | Single-Day Share | Price Position | Primary Buyer |",
+        "|---:|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in top.itertuples(index=False):
         lines.append(
             f"| {row.review_rank} | {row.symbol} | {row.dominant_pattern} | {pd.Timestamp(row.episode_start):%Y-%m-%d} | "
             f"{pd.Timestamp(row.last_qualifying_date):%Y-%m-%d} | {row.qualifying_dates} | "
             f"{row.max_pressure_multiple:.2f}x | {row.max_recent_net_buy:,.0f} | "
-            f"{row.max_buy_participation:.1%} | {row.primary_buyer} |"
+            f"{row.max_buy_participation:.1%} | {row.median_pressure_days:.1f} | "
+            f"{row.max_single_day_pressure_share:.1%} | {row.median_price_position:.1%} | "
+            f"{row.primary_buyer} |"
         )
     (cfg.output_dir / "general_broker_flow_anomaly_report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -315,6 +409,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-buyer-retention", type=float, default=0.50)
     parser.add_argument("--min-buy-participation", type=float, default=0.08)
     parser.add_argument("--min-pressure-multiple", type=float, default=1.50)
+    parser.add_argument("--min-pressure-days", type=int, default=3)
+    parser.add_argument("--max-single-day-pressure-share", type=float, default=0.65)
+    parser.add_argument("--ohlc", type=Path, default=resolve_data("_derived", "ohlc.parquet"))
+    parser.add_argument("--price-window", type=int, default=60)
+    parser.add_argument("--max-price-position", type=float, default=0.65)
     parser.add_argument("--episode-gap-sessions", type=int, default=5)
     parser.add_argument("--min-episode-triggers", type=int, default=3)
     return parser.parse_args()
@@ -338,16 +437,34 @@ def main() -> None:
         min_buyer_retention=args.min_buyer_retention,
         min_buy_participation=args.min_buy_participation,
         min_pressure_multiple=args.min_pressure_multiple,
+        min_pressure_days=max(1, int(args.min_pressure_days)),
+        max_single_day_pressure_share=args.max_single_day_pressure_share,
+        ohlc_path=args.ohlc,
+        price_window=max(10, int(args.price_window)),
+        max_price_position=args.max_price_position,
         episode_gap_sessions=args.episode_gap_sessions,
         min_episode_triggers=args.min_episode_triggers,
     )
     lookup = load_broker_lookup(cfg.broker_list_path)
     paths = select_stock_paths(build_parquet_index(cfg.broker_dirs), cfg.symbols, set(), cfg.max_symbols)
+    price_context = load_price_context(
+        cfg.ohlc_path,
+        {symbol for symbol, _ in paths},
+        cfg.start_date,
+        cfg.end_date,
+        cfg.price_window,
+    )
+    if price_context.empty:
+        raise FileNotFoundError(f"No price context loaded from {cfg.ohlc_path}")
+    price_context_by_symbol = {
+        symbol: frame.set_index("date")
+        for symbol, frame in price_context.groupby("symbol", sort=False)
+    }
     all_episodes: list[pd.DataFrame] = []
     all_triggers: list[pd.DataFrame] = []
     for index, (symbol, symbol_paths) in enumerate(paths, start=1):
         raw = load_symbol_daily(symbol, symbol_paths, lookup, cfg.start_date, cfg.end_date)
-        features = build_features(build_window_metrics(raw, cfg), cfg)
+        features = build_features(build_window_metrics(raw, cfg, price_context_by_symbol), cfg)
         if not features.empty:
             episodes, triggers = build_episodes(features, cfg, raw)
             if not episodes.empty:
@@ -355,7 +472,10 @@ def main() -> None:
             if not triggers.empty:
                 all_triggers.append(triggers)
         if index % 100 == 0 or index == len(paths):
-            print(f"processed {index}/{len(paths)} symbols, episodes={sum(len(frame) for frame in all_episodes)}")
+            print(
+                f"processed {index}/{len(paths)} symbols, episodes={sum(len(frame) for frame in all_episodes)}",
+                flush=True,
+            )
     episodes = pd.concat(all_episodes, ignore_index=True) if all_episodes else pd.DataFrame()
     triggers = pd.concat(all_triggers, ignore_index=True) if all_triggers else pd.DataFrame()
     write_outputs(episodes, triggers, cfg, len(paths))
