@@ -258,7 +258,7 @@ def load_key_branch_cases() -> pd.DataFrame:
     cases["single_day_share_max"] = pd.to_numeric(cases["max_single_day_pressure_share"], errors="coerce")
     cases["price_position_median"] = pd.to_numeric(cases["median_price_position"], errors="coerce")
     cases["buyer_names_top"] = cases["buyer_names"].fillna("").astype(str)
-    return cases.sort_values(["max_score", "n_events"], ascending=[False, False]).reset_index(drop=True)
+    return cases.sort_values(["case_end", "max_score"], ascending=[False, False]).reset_index(drop=True)
 
 
 def key_branch_source_label() -> str:
@@ -309,6 +309,14 @@ def format_event_table(events: pd.DataFrame, limit: int = 80) -> list[dict[str, 
         if col in out.columns:
             out[col] = out[col].map(_fmt_pct)
     return out.to_dict("records")
+
+
+KEY_CASE_STYLE_CELL_CONDITIONAL = [
+    {"if": {"column_id": "symbol"}, "minWidth": "64px", "width": "72px"},
+    {"if": {"column_id": "n_events"}, "minWidth": "88px", "width": "96px", "textAlign": "right"},
+    {"if": {"column_id": "case_start"}, "minWidth": "92px", "width": "100px"},
+    {"if": {"column_id": "case_end"}, "minWidth": "92px", "width": "100px"},
+]
 
 
 # -----------------------------
@@ -1208,7 +1216,11 @@ app.layout = html.Div(
                     data=format_case_table(load_key_branch_cases(), limit=50),
                     style_table={"overflowX": "auto", "maxHeight": "260px", "overflowY": "auto"},
                     style_cell={"fontSize": "12px", "padding": "6px", "whiteSpace": "nowrap"},
+                    style_cell_conditional=KEY_CASE_STYLE_CELL_CONDITIONAL,
                     style_header={"fontWeight": 700, "background": "#eaf2ff"},
+                    sort_action="native",
+                    sort_mode="multi",
+                    sort_by=[{"column_id": "case_end", "direction": "desc"}],
                     page_action="none",
                     fixed_rows={"headers": True},
                 ),
@@ -1277,11 +1289,15 @@ app.layout = html.Div(
                                 html.Div("本股關鍵分點 Case", style={"fontWeight": 700, "marginBottom": "8px"}),
                                 dash_table.DataTable(
                                     id="key-case-table",
-                                    columns=KEY_CASE_COLUMNS[1:],
+                                    columns=KEY_CASE_COLUMNS,
                                     data=[],
                                     style_table={"overflowX": "auto", "maxHeight": "220px", "overflowY": "auto"},
                                     style_cell={"fontSize": "12px", "padding": "6px", "whiteSpace": "nowrap"},
+                                    style_cell_conditional=KEY_CASE_STYLE_CELL_CONDITIONAL,
                                     style_header={"fontWeight": 700},
+                                    sort_action="native",
+                                    sort_mode="multi",
+                                    sort_by=[{"column_id": "case_end", "direction": "desc"}],
                                     page_action="none",
                                 ),
                             ],
@@ -1651,9 +1667,10 @@ def render_all(
     State("top-buy-table", "data"),
     State("top-sell-table", "data"),
     State("key-case-table", "data"),
+    State("key-case-table", "derived_virtual_data"),
     prevent_initial_call=True,
 )
-def on_table_click(buy_cell, sell_cell, case_cell, buy_data, sell_data, case_data):
+def on_table_click(buy_cell, sell_cell, case_cell, buy_data, sell_data, case_data, visible_case_data):
     if not callback_context.triggered:
         return no_update
 
@@ -1668,7 +1685,7 @@ def on_table_click(buy_cell, sell_cell, case_cell, buy_data, sell_data, case_dat
         broker_col = "broker"
     else:
         cell = case_cell
-        data = case_data or []
+        data = visible_case_data or case_data or []
         broker_col = "broker_name"
 
     if not cell:
@@ -1687,19 +1704,30 @@ def on_table_click(buy_cell, sell_cell, case_cell, buy_data, sell_data, case_dat
 @app.callback(
     Output("stock-input", "value", allow_duplicate=True),
     Output("store-pending-broker", "data", allow_duplicate=True),
+    Output("date-start", "date", allow_duplicate=True),
+    Output("date-end", "date", allow_duplicate=True),
     Input("key-case-overview-table", "active_cell"),
     State("key-case-overview-table", "data"),
+    State("key-case-overview-table", "derived_virtual_data"),
     prevent_initial_call=True,
 )
-def on_key_case_overview_click(active_cell, data):
+def on_key_case_overview_click(active_cell, data, visible_data):
     if not active_cell or not data:
-        return no_update, no_update
+        return no_update, no_update, no_update, no_update
+    rows = visible_data or data
     row = active_cell.get("row")
-    if row is None or row >= len(data):
-        return no_update, no_update
-    symbol = str(data[row].get("symbol", "")).strip()
-    broker = str(data[row].get("broker_name", "")).strip()
-    return symbol or no_update, broker or None
+    if row is None or row >= len(rows):
+        return no_update, no_update, no_update, no_update
+    selected = rows[row]
+    symbol = str(selected.get("symbol", "")).strip()
+    broker = str(selected.get("broker_name", "")).strip()
+    start = pd.to_datetime(selected.get("case_start"), errors="coerce")
+    end = pd.to_datetime(selected.get("case_end"), errors="coerce")
+    if pd.isna(start) or pd.isna(end):
+        return symbol or no_update, broker or None, no_update, no_update
+    date_start = (start - pd.DateOffset(months=1)).date().isoformat()
+    date_end = (end + pd.DateOffset(months=1)).date().isoformat()
+    return symbol or no_update, broker or None, date_start, date_end
 
 
 @app.callback(
