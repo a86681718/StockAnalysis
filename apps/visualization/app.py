@@ -19,7 +19,7 @@ from stockanalysis.config import resolve_data, resolve_output
 _SYMBOL_NAME_MAP: dict[str, str] | None = None
 _BROKER_NAME_MAP: dict[str, str] | None = None
 _WARRANT_NAME_MAP: dict[str, str] | None = None
-KEY_BRANCH_TMP_DIR = Path("/private/tmp/broker_branch_accumulation_recent_top160")
+GENERAL_BROKER_FLOW_DIR = resolve_output("analysis", "general_broker_flow_anomaly")
 BAR_WIDTH_DAYS = 0.7
 BAR_WIDTH_MS = int(24 * 60 * 60 * 1000 * BAR_WIDTH_DAYS)
 
@@ -97,18 +97,16 @@ def key_branch_dirs() -> list[Path]:
     dirs = []
     if env_dir:
         dirs.append(Path(env_dir).expanduser())
-    dirs.extend(
-        [
-            resolve_output("analysis", "broker_branch_accumulation"),
-            KEY_BRANCH_TMP_DIR,
-        ]
-    )
+    dirs.append(GENERAL_BROKER_FLOW_DIR)
     return dirs
 
 
 def find_key_branch_dir() -> Path | None:
     for directory in key_branch_dirs():
-        if (directory / "broker_branch_accumulation_events.csv").exists():
+        if (
+            (directory / "general_broker_flow_anomaly_review_cases.parquet").exists()
+            and (directory / "general_broker_flow_anomaly_daily_triggers.parquet").exists()
+        ):
             return directory
     return None
 
@@ -176,16 +174,26 @@ def load_key_branch_events() -> pd.DataFrame:
     directory = find_key_branch_dir()
     if directory is None:
         return pd.DataFrame()
-    path = directory / "broker_branch_accumulation_events.csv"
+    path = directory / "general_broker_flow_anomaly_daily_triggers.parquet"
     try:
-        events = pd.read_csv(path, dtype={"underlying_stock_id": str}, encoding="utf-8-sig")
+        events = pd.read_parquet(path)
     except Exception:
         return pd.DataFrame()
     if events.empty:
         return events
-    events["underlying_stock_id"] = events["underlying_stock_id"].astype(str).str.strip()
+    events = events.copy()
+    events["symbol"] = events["symbol"].astype(str).str.strip()
+    events["underlying_stock_id"] = events["symbol"]
     events["date"] = pd.to_datetime(events["date"], errors="coerce")
-    events = events.dropna(subset=["date", "underlying_stock_id"]).copy()
+    events = events.dropna(subset=["date", "symbol"]).copy()
+    events["broker_name"] = events["top_buyer"].fillna("").astype(str)
+    events["event_type"] = events["pattern"].fillna("").astype(str)
+    events["anomaly_score"] = pd.to_numeric(events["pressure_multiple"], errors="coerce").fillna(0.0)
+    events["stock_window_net_buy"] = pd.to_numeric(events["recent_net_buy"], errors="coerce").fillna(0.0)
+    events["stock_window_branch_share"] = pd.to_numeric(events["recent_mean_top_share"], errors="coerce")
+    events["pressure_days"] = pd.to_numeric(events["recent_pressure_days"], errors="coerce")
+    events["single_day_share"] = pd.to_numeric(events["max_single_day_pressure_share"], errors="coerce")
+    events["price_position"] = pd.to_numeric(events["recent_price_position"], errors="coerce")
     return events.sort_values(["anomaly_score", "date"], ascending=[False, False]).reset_index(drop=True)
 
 
@@ -228,19 +236,29 @@ def load_key_branch_cases() -> pd.DataFrame:
     directory = find_key_branch_dir()
     if directory is None:
         return pd.DataFrame()
-    path = _latest_matching_file(directory, "recent_cases_*.csv")
-    if path is not None:
-        try:
-            cases = pd.read_csv(path, dtype={"symbol": str}, encoding="utf-8-sig")
-        except Exception:
-            cases = pd.DataFrame()
-        if not cases.empty:
-            for col in ("case_start", "case_end", "top_date"):
-                if col in cases.columns:
-                    cases[col] = pd.to_datetime(cases[col], errors="coerce")
-            cases["symbol"] = cases["symbol"].astype(str).str.strip()
-            return cases.sort_values(["max_score", "n_events"], ascending=[False, False]).reset_index(drop=True)
-    return derive_key_branch_cases(load_key_branch_events())
+    path = directory / "general_broker_flow_anomaly_review_cases.parquet"
+    try:
+        cases = pd.read_parquet(path)
+    except Exception:
+        return pd.DataFrame()
+    if cases.empty:
+        return cases
+    cases = cases.copy()
+    cases["symbol"] = cases["symbol"].astype(str).str.strip()
+    cases["broker_name"] = cases["primary_buyer"].fillna("").astype(str)
+    cases["case_start"] = pd.to_datetime(cases["episode_start"], errors="coerce")
+    cases["case_end"] = pd.to_datetime(cases["last_qualifying_date"], errors="coerce")
+    cases["top_date"] = cases["case_end"]
+    cases["n_events"] = pd.to_numeric(cases["qualifying_dates"], errors="coerce").fillna(0).astype(int)
+    cases["top_event_type"] = cases["dominant_pattern"].fillna("").astype(str)
+    cases["max_score"] = pd.to_numeric(cases["severity_score"], errors="coerce").fillna(0.0)
+    cases["stock_window_net_buy_max"] = pd.to_numeric(cases["max_recent_net_buy"], errors="coerce").fillna(0.0)
+    cases["stock_window_branch_share_max"] = pd.to_numeric(cases["primary_buyer_share"], errors="coerce")
+    cases["pressure_multiple_max"] = pd.to_numeric(cases["max_pressure_multiple"], errors="coerce")
+    cases["single_day_share_max"] = pd.to_numeric(cases["max_single_day_pressure_share"], errors="coerce")
+    cases["price_position_median"] = pd.to_numeric(cases["median_price_position"], errors="coerce")
+    cases["buyer_names_top"] = cases["buyer_names"].fillna("").astype(str)
+    return cases.sort_values(["max_score", "n_events"], ascending=[False, False]).reset_index(drop=True)
 
 
 def key_branch_source_label() -> str:
@@ -265,11 +283,15 @@ def format_case_table(cases: pd.DataFrame, limit: int = 80) -> list[dict[str, ob
     for col in ("case_start", "case_end", "top_date"):
         if col in out.columns:
             out[col] = pd.to_datetime(out[col], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
-    out["max_score"] = out["max_score"].map(_fmt_score)
-    out["stock_window_net_buy_max"] = out["stock_window_net_buy_max"].map(_fmt_int)
-    out["stock_window_branch_share_max"] = out["stock_window_branch_share_max"].map(_fmt_pct)
-    out["warrant_window_net_buy_max"] = out["warrant_window_net_buy_max"].map(_fmt_int)
-    out["warrant_window_branch_share_max"] = out["warrant_window_branch_share_max"].map(_fmt_pct)
+    for col in ("max_score", "pressure_multiple_max"):
+        if col in out.columns:
+            out[col] = out[col].map(_fmt_score)
+    for col in ("stock_window_net_buy_max",):
+        if col in out.columns:
+            out[col] = out[col].map(_fmt_int)
+    for col in ("stock_window_branch_share_max", "single_day_share_max", "price_position_median"):
+        if col in out.columns:
+            out[col] = out[col].map(_fmt_pct)
     return out.to_dict("records")
 
 
@@ -280,10 +302,10 @@ def format_event_table(events: pd.DataFrame, limit: int = 80) -> list[dict[str, 
     out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
     for col in ("anomaly_score",):
         out[col] = out[col].map(_fmt_score)
-    for col in ("stock_window_net_buy", "warrant_window_net_buy"):
+    for col in ("stock_window_net_buy",):
         if col in out.columns:
             out[col] = out[col].map(_fmt_int)
-    for col in ("stock_window_branch_share", "warrant_window_branch_share"):
+    for col in ("stock_window_branch_share", "single_day_share", "price_position"):
         if col in out.columns:
             out[col] = out[col].map(_fmt_pct)
     return out.to_dict("records")
@@ -717,9 +739,9 @@ def build_figure(
                     name="關鍵分點事件",
                     customdata=ev[["broker_name", "event_type", "anomaly_score"]].values.tolist(),
                     hovertemplate=(
-                        "關鍵分點=%{customdata[0]}<br>"
-                        "類型=%{customdata[1]}<br>"
-                        "score=%{customdata[2]:.2f}<extra></extra>"
+                        "Top買方=%{customdata[0]}<br>"
+                        "型態=%{customdata[1]}<br>"
+                        "壓力倍數=%{customdata[2]:.2f}<extra></extra>"
                     ),
                     marker=dict(color="#ffb000", size=13, symbol="star", line=dict(color="#7a3f00", width=1)),
                 ),
@@ -798,19 +820,19 @@ def build_figure(
     top_buy_row = 5
     top_sell_row = 6
 
-    # Row 4: Selected broker warrant-side buy/sell across event-related warrants
+    # Row 4: New general broker-flow anomaly pressure.
     if show_key_branch:
-        if warrant_broker_df is not None and not warrant_broker_df.empty:
+        if key_events is not None and not key_events.empty:
             wd = (
-                warrant_broker_df[warrant_broker_df["broker"] == selected_broker]
-                .groupby("date", as_index=False)[["buy", "sell", "net"]]
+                key_events.groupby("date", as_index=False)[["stock_window_net_buy"]]
                 .sum()
+                .rename(columns={"stock_window_net_buy": "net"})
                 .sort_values("date")
             )
         else:
-            wd = pd.DataFrame(columns=["date", "buy", "sell", "net"])
+            wd = pd.DataFrame(columns=["date", "net"])
     else:
-        wd = pd.DataFrame(columns=["date", "buy", "sell", "net"])
+        wd = pd.DataFrame(columns=["date", "net"])
         top_buy_row = 4
         top_sell_row = 5
 
@@ -818,21 +840,9 @@ def build_figure(
         fig.add_trace(
             go.Bar(
                 x=_plot_dates(wd),
-                y=_plot_values(wd["buy"]),
-                name=f"{selected_broker} 權證買入",
+                y=_plot_values(wd["net"]),
+                name="新版關鍵買壓",
                 marker_color="#b42318",
-                width=bar_width_ms,
-                showlegend=False,
-            ),
-            row=4,
-            col=1,
-        )
-        fig.add_trace(
-            go.Bar(
-                x=_plot_dates(wd),
-                y=_plot_values(-wd["sell"]),
-                name=f"{selected_broker} 權證賣出",
-                marker_color="#027a48",
                 width=bar_width_ms,
                 showlegend=False,
             ),
@@ -1065,14 +1075,9 @@ def build_key_relation_panel(key_cases: pd.DataFrame, key_events: pd.DataFrame, 
         return html.Div("這檔股票目前沒有關鍵分點事件資料。", style={"opacity": 0.7, "fontSize": "13px"})
 
     selected_events = key_events[key_events["broker_name"] == selected_broker].copy() if not key_events.empty else pd.DataFrame()
-    selected_warrant = warrant_broker_view[warrant_broker_view["broker"] == selected_broker].copy() if not warrant_broker_view.empty else pd.DataFrame()
     event_count = len(selected_events)
-    warrant_net = selected_warrant["net"].sum() if not selected_warrant.empty else 0
-    warrant_ids = []
-    if not selected_events.empty and "warrant_window_ids" in selected_events.columns:
-        for value in selected_events["warrant_window_ids"].dropna():
-            warrant_ids.extend(_split_tokens(value))
-    warrant_ids = sorted(set(warrant_ids))
+    selected_net = selected_events["stock_window_net_buy"].sum() if not selected_events.empty else 0
+    max_pressure_multiple = selected_events["anomaly_score"].max() if not selected_events.empty else None
 
     top_case = key_cases.iloc[0] if not key_cases.empty else None
     top_case_label = "—"
@@ -1086,37 +1091,36 @@ def build_key_relation_panel(key_cases: pd.DataFrame, key_events: pd.DataFrame, 
         html.Div([html.Span("本股最高分 case：", style={"opacity": 0.7}), html.Span(top_case_label)]),
         html.Div([html.Span("目前選定分點：", style={"opacity": 0.7}), html.Span(selected_broker or "—")]),
         html.Div([html.Span("區間內選定分點事件數：", style={"opacity": 0.7}), html.Span(f"{event_count}")]),
-        html.Div([html.Span("區間內選定分點權證淨買：", style={"opacity": 0.7}), html.Span(_fmt_int(warrant_net))]),
-        html.Div([html.Span("相關權證：", style={"opacity": 0.7}), html.Span(", ".join(warrant_ids[:8]) if warrant_ids else "—")]),
+        html.Div([html.Span("區間內新版買壓：", style={"opacity": 0.7}), html.Span(_fmt_int(selected_net))]),
+        html.Div([html.Span("最高壓力倍數：", style={"opacity": 0.7}), html.Span(_fmt_score(max_pressure_multiple))]),
     ]
     return html.Div(style={"display": "grid", "gap": "6px", "fontSize": "13px"}, children=items)
 
 
 KEY_CASE_COLUMNS = [
     {"name": "股票", "id": "symbol"},
-    {"name": "分點", "id": "broker_name"},
+    {"name": "主要買方", "id": "broker_name"},
     {"name": "開始", "id": "case_start"},
     {"name": "結束", "id": "case_end"},
-    {"name": "事件", "id": "n_events"},
-    {"name": "類型", "id": "top_event_type"},
+    {"name": "觸發天數", "id": "n_events"},
+    {"name": "型態", "id": "top_event_type"},
     {"name": "Score", "id": "max_score"},
-    {"name": "股票買超", "id": "stock_window_net_buy_max"},
-    {"name": "股票占比", "id": "stock_window_branch_share_max"},
-    {"name": "權證買超", "id": "warrant_window_net_buy_max"},
-    {"name": "權證占比", "id": "warrant_window_branch_share_max"},
-    {"name": "權證", "id": "warrant_window_ids_top"},
+    {"name": "壓力倍數", "id": "pressure_multiple_max"},
+    {"name": "買壓", "id": "stock_window_net_buy_max"},
+    {"name": "主要占比", "id": "stock_window_branch_share_max"},
+    {"name": "單日占比", "id": "single_day_share_max"},
+    {"name": "價格位置", "id": "price_position_median"},
 ]
 
 KEY_EVENT_COLUMNS = [
     {"name": "日期", "id": "date"},
-    {"name": "分點", "id": "broker_name"},
-    {"name": "類型", "id": "event_type"},
-    {"name": "Score", "id": "anomaly_score"},
-    {"name": "股票買超", "id": "stock_window_net_buy"},
-    {"name": "股票占比", "id": "stock_window_branch_share"},
-    {"name": "權證買超", "id": "warrant_window_net_buy"},
-    {"name": "權證占比", "id": "warrant_window_branch_share"},
-    {"name": "權證", "id": "warrant_window_ids"},
+    {"name": "Top 買方", "id": "broker_name"},
+    {"name": "型態", "id": "event_type"},
+    {"name": "壓力倍數", "id": "anomaly_score"},
+    {"name": "買壓", "id": "stock_window_net_buy"},
+    {"name": "Top 占比", "id": "stock_window_branch_share"},
+    {"name": "單日占比", "id": "single_day_share"},
+    {"name": "價格位置", "id": "price_position"},
 ]
 
 
@@ -1194,7 +1198,7 @@ app.layout = html.Div(
                 html.Div(
                     style={"display": "flex", "justifyContent": "space-between", "gap": "12px", "alignItems": "baseline", "marginBottom": "8px"},
                     children=[
-                        html.Div("近兩月關鍵分點總覽（點股票列可載入）", style={"fontWeight": 700}),
+                        html.Div("新版關鍵分點總覽（點股票列可載入）", style={"fontWeight": 700}),
                         html.Div(f"資料來源：{key_branch_source_label()}", style={"fontSize": "12px", "opacity": 0.65}),
                     ],
                 ),
@@ -1262,7 +1266,7 @@ app.layout = html.Div(
                             id="key-relation-panel",
                             style={"display": "none", "border": "1px solid #fed7aa", "borderRadius": "10px", "padding": "10px", "background": "#fffaf5"},
                             children=[
-                                html.Div("股票 / 權證關係", style={"fontWeight": 700, "marginBottom": "8px"}),
+                                html.Div("新版關鍵分點摘要", style={"fontWeight": 700, "marginBottom": "8px"}),
                                 html.Div(id="key-relation-box"),
                             ],
                         ),
@@ -1454,7 +1458,7 @@ def on_stock_change(stock_id: str, key_branch_toggle, pending_broker: str | None
 
     hint = f"資料筆數：K線 {len(ohlcv)} 天、股票分點 {len(broker_df):,} 筆"
     if include_key_branch:
-        hint += f"、權證分點 {len(warrant_broker_df):,} 筆、關鍵事件 {len(key_events):,} 筆"
+        hint += f"、新版關鍵事件 {len(key_events):,} 筆"
     return (
         ohlcv.to_dict("records"),
         broker_df.to_dict("records"),
