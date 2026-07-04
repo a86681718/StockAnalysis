@@ -245,6 +245,8 @@ def load_key_branch_cases() -> pd.DataFrame:
         return cases
     cases = cases.copy()
     cases["symbol"] = cases["symbol"].astype(str).str.strip()
+    name_map = load_symbol_name_map()
+    cases["stock_name"] = cases["symbol"].map(name_map).fillna("")
     cases["broker_name"] = cases["primary_buyer"].fillna("").astype(str)
     cases["case_start"] = pd.to_datetime(cases["episode_start"], errors="coerce")
     cases["case_end"] = pd.to_datetime(cases["last_qualifying_date"], errors="coerce")
@@ -313,6 +315,7 @@ def format_event_table(events: pd.DataFrame, limit: int = 80) -> list[dict[str, 
 
 KEY_CASE_STYLE_CELL_CONDITIONAL = [
     {"if": {"column_id": "symbol"}, "minWidth": "64px", "width": "72px"},
+    {"if": {"column_id": "stock_name"}, "minWidth": "88px", "width": "110px"},
     {"if": {"column_id": "n_events"}, "minWidth": "88px", "width": "96px", "textAlign": "right"},
     {"if": {"column_id": "case_start"}, "minWidth": "92px", "width": "100px"},
     {"if": {"column_id": "case_end"}, "minWidth": "92px", "width": "100px"},
@@ -1107,6 +1110,7 @@ def build_key_relation_panel(key_cases: pd.DataFrame, key_events: pd.DataFrame, 
 
 KEY_CASE_COLUMNS = [
     {"name": "股票", "id": "symbol"},
+    {"name": "名稱", "id": "stock_name"},
     {"name": "主要買方", "id": "broker_name"},
     {"name": "開始", "id": "case_start"},
     {"name": "結束", "id": "case_end"},
