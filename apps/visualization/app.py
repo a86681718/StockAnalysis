@@ -968,7 +968,7 @@ def build_figure(
     fig.update_yaxes(title_text="Volume", row=2, col=1)
     fig.update_yaxes(title_text="股票分點", row=3, col=1)
     if show_key_branch:
-        fig.update_yaxes(title_text="權證分點", row=4, col=1)
+        fig.update_yaxes(title_text="新版關鍵買壓", row=4, col=1)
     fig.update_yaxes(title_text="Top Buyers", row=top_buy_row, col=1)
     fig.update_yaxes(title_text="Top Sellers", row=top_sell_row, col=1)
     return fig
