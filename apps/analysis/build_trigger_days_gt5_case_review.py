@@ -366,13 +366,67 @@ def _json_default(value: object) -> object:
     return str(value)
 
 
-def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[str, object]]:
+def _build_universe_index(trigger_gt5: pd.DataFrame, selected: pd.DataFrame) -> pd.DataFrame:
+    selected_keys = set(
+        zip(
+            selected["symbol"].astype(str),
+            selected["broker"].astype(str),
+            pd.to_datetime(selected["episode_start"]).dt.strftime("%Y-%m-%d"),
+        )
+    )
+    out = trigger_gt5.copy()
+    out["symbol"] = out["symbol"].astype(str)
+    out["broker"] = out["broker"].astype(str)
+    out["episode_start_text"] = pd.to_datetime(out["episode_start"]).dt.strftime("%Y-%m-%d")
+    out["selected_for_detail"] = [
+        (symbol, broker, start) in selected_keys
+        for symbol, broker, start in zip(out["symbol"], out["broker"], out["episode_start_text"])
+    ]
+    out["scope_note"] = np.select(
+        [
+            out["selected_for_detail"],
+            out["review_eligible"],
+            out["ongoing"],
+        ],
+        [
+            "detailed_review_case",
+            "review_eligible_beyond_limit",
+            "ongoing_but_not_review_eligible",
+        ],
+        default="historical_or_ended_episode",
+    )
+    keep = [
+        "rank",
+        "symbol",
+        "broker",
+        "broker_name",
+        "episode_start",
+        "last_qualifying_date",
+        "status_as_of",
+        "status",
+        "ongoing",
+        "confidence",
+        "qualifying_dates",
+        "observed_sessions",
+        "positive_net_sessions",
+        "cumulative_net_buy",
+        "cumulative_purity",
+        "cumulative_buy_share",
+        "review_eligible",
+        "selected_for_detail",
+        "scope_note",
+    ]
+    return out[keep].sort_values(["selected_for_detail", "rank"], ascending=[False, True]).reset_index(drop=True)
+
+
+def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[str, object], pd.DataFrame]:
     episodes = pd.read_parquet(cfg.episodes_path)
     episodes["episode_start"] = pd.to_datetime(episodes["episode_start"]).dt.normalize()
     episodes["last_qualifying_date"] = pd.to_datetime(episodes["last_qualifying_date"]).dt.normalize()
     trigger_gt5 = episodes[episodes["qualifying_dates"] > cfg.min_trigger_days].copy()
     eligible_gt5 = trigger_gt5[trigger_gt5["review_eligible"]].copy()
     selected = eligible_gt5.sort_values(["rank"]).head(cfg.max_cases).reset_index(drop=True)
+    universe = _build_universe_index(trigger_gt5, selected)
     symbols = set(selected["symbol"].astype(str))
     stock_names = _load_stock_names(cfg.company_profile_paths)
     broker_lookup = load_broker_lookup(cfg.broker_list_path)
@@ -441,8 +495,9 @@ def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[st
         "news_status": "google_news_rss" if cfg.fetch_news else "links_only_fetch_disabled",
         "cases_with_news": sum(1 for case in cases if case["news_items"]),
         "news_cache_path": str(news_cache_path) if cfg.fetch_news else "",
+        "all_trigger_gt5_cases_path": str(cfg.output_dir / "all_trigger_gt5_cases.csv"),
     }
-    return cases, summary
+    return cases, summary, universe
 
 
 def write_detail_reports(cases: list[dict[str, object]], out_dir: Path, limit: int) -> None:
@@ -526,6 +581,7 @@ def write_review_report(cases: list[dict[str, object]], summary: dict[str, objec
         f"- News status: `{summary['news_status']}`",
         f"- Cases with RSS news items: `{summary['cases_with_news']}`",
         f"- News cache: `{summary['news_cache_path'] or 'n/a'}`",
+        f"- Full trigger-days index: `{summary['all_trigger_gt5_cases_path']}`",
         "",
         "## Evaluation Facets",
         "",
@@ -608,7 +664,7 @@ def _html_page(cases: list[dict[str, object]], summary: dict[str, object]) -> st
     <div class="meta">資料來源: single_branch_persistent_accumulation + OHLC + broker branch parquet。最新訊號日: {html.escape(str(summary.get("latest_signal_date", "")))}</div>
   </header>
   <main>
-    <p class="note">入口頁先用可重現的本地量化欄位排序，每個案例可點入 markdown 細報。最近新聞欄位來自 Google News RSS，只作為人工確認線索。</p>
+    <p class="note">入口頁先用可重現的本地量化欄位排序，每個案例可點入 markdown 細報。最近新聞欄位來自 Google News RSS，只作為人工確認線索。完整 {summary.get("total_trigger_gt5_episodes", 0)} 筆觸發天數案例另存於 <a href="all_trigger_gt5_cases.csv">all_trigger_gt5_cases.csv</a>。</p>
     <section class="grid">
       <div class="metric">案例數<b>{summary.get("case_count", 0)}</b></div>
       <div class="metric">觸發門檻<b>&gt; {summary.get("min_trigger_days", "")}</b></div>
@@ -650,13 +706,19 @@ def _html_page(cases: list[dict[str, object]], summary: dict[str, object]) -> st
 """
 
 
-def write_outputs(cases: list[dict[str, object]], summary: dict[str, object], cfg: CaseReviewConfig) -> None:
+def write_outputs(
+    cases: list[dict[str, object]],
+    summary: dict[str, object],
+    universe: pd.DataFrame,
+    cfg: CaseReviewConfig,
+) -> None:
     out_dir = ensure_dir(cfg.output_dir)
     (out_dir / "case_reviews.json").write_text(
         json.dumps({"summary": summary, "cases": cases}, ensure_ascii=False, indent=2, default=_json_default),
         encoding="utf-8",
     )
     pd.DataFrame(cases).to_csv(out_dir / "case_reviews.csv", index=False, encoding="utf-8-sig")
+    universe.to_csv(out_dir / "all_trigger_gt5_cases.csv", index=False, encoding="utf-8-sig")
     write_detail_reports(cases, out_dir, cfg.detail_case_limit)
     write_review_report(cases, summary, out_dir)
     (out_dir / "index.html").write_text(_html_page(cases, summary), encoding="utf-8")
@@ -699,8 +761,8 @@ def main() -> None:
         max_news_items=max(0, int(args.max_news_items)),
         news_timeout_seconds=max(1.0, float(args.news_timeout_seconds)),
     )
-    cases, summary = build_cases(cfg)
-    write_outputs(cases, summary, cfg)
+    cases, summary, universe = build_cases(cfg)
+    write_outputs(cases, summary, universe, cfg)
     print(f"Wrote {len(cases)} case reviews to {cfg.output_dir}")
 
 
