@@ -278,10 +278,10 @@ def default_stock_id() -> str:
     return "2330"
 
 
-def format_case_table(cases: pd.DataFrame, limit: int = 80) -> list[dict[str, object]]:
+def format_case_table(cases: pd.DataFrame, limit: int | None = 80) -> list[dict[str, object]]:
     if cases.empty:
         return []
-    out = cases.head(limit).copy()
+    out = cases.head(limit).copy() if limit is not None else cases.copy()
     for col in ("case_start", "case_end", "top_date"):
         if col in out.columns:
             out[col] = pd.to_datetime(out[col], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
@@ -1217,7 +1217,7 @@ app.layout = html.Div(
                 dash_table.DataTable(
                     id="key-case-overview-table",
                     columns=KEY_CASE_COLUMNS,
-                    data=format_case_table(load_key_branch_cases(), limit=50),
+                    data=format_case_table(load_key_branch_cases(), limit=None),
                     style_table={"overflowX": "auto", "maxHeight": "260px", "overflowY": "auto"},
                     style_cell={"fontSize": "12px", "padding": "6px", "whiteSpace": "nowrap"},
                     style_cell_conditional=KEY_CASE_STYLE_CELL_CONDITIONAL,
