@@ -1114,7 +1114,7 @@ KEY_CASE_COLUMNS = [
     {"name": "主要買方", "id": "broker_name"},
     {"name": "開始", "id": "case_start"},
     {"name": "結束", "id": "case_end"},
-    {"name": "觸發天數", "id": "n_events"},
+    {"name": "觸發天數", "id": "n_events", "type": "numeric"},
     {"name": "型態", "id": "top_event_type"},
     {"name": "Score", "id": "max_score"},
     {"name": "壓力倍數", "id": "pressure_multiple_max"},
@@ -1211,7 +1211,22 @@ app.layout = html.Div(
                     style={"display": "flex", "justifyContent": "space-between", "gap": "12px", "alignItems": "baseline", "marginBottom": "8px"},
                     children=[
                         html.Div("新版關鍵分點總覽（點股票列可載入）", style={"fontWeight": 700}),
-                        html.Div(f"資料來源：{key_branch_source_label()}", style={"fontSize": "12px", "opacity": 0.65}),
+                        html.Div(
+                            style={"display": "flex", "alignItems": "center", "gap": "8px", "fontSize": "12px"},
+                            children=[
+                                html.Label("顯示前 N 筆"),
+                                dcc.Input(
+                                    id="key-case-limit",
+                                    type="number",
+                                    value=0,
+                                    min=0,
+                                    step=10,
+                                    debounce=True,
+                                    style={"width": "78px", "padding": "4px 6px"},
+                                ),
+                                html.Div(f"資料來源：{key_branch_source_label()}", style={"opacity": 0.65}),
+                            ],
+                        ),
                     ],
                 ),
                 dash_table.DataTable(
@@ -1225,6 +1240,7 @@ app.layout = html.Div(
                     sort_action="native",
                     sort_mode="multi",
                     sort_by=[{"column_id": "case_end", "direction": "desc"}],
+                    filter_action="native",
                     page_action="none",
                     fixed_rows={"headers": True},
                 ),
@@ -1302,6 +1318,7 @@ app.layout = html.Div(
                                     sort_action="native",
                                     sort_mode="multi",
                                     sort_by=[{"column_id": "case_end", "direction": "desc"}],
+                                    filter_action="native",
                                     page_action="none",
                                 ),
                             ],
@@ -1318,6 +1335,10 @@ app.layout = html.Div(
                                     style_table={"overflowX": "auto", "maxHeight": "260px", "overflowY": "auto"},
                                     style_cell={"fontSize": "12px", "padding": "6px", "whiteSpace": "nowrap"},
                                     style_header={"fontWeight": 700},
+                                    sort_action="native",
+                                    sort_mode="multi",
+                                    sort_by=[{"column_id": "date", "direction": "desc"}],
+                                    filter_action="native",
                                     page_action="none",
                                 ),
                             ],
@@ -1340,6 +1361,9 @@ app.layout = html.Div(
                                     style_table={"overflowX": "auto"},
                                     style_cell={"fontSize": "12px", "padding": "6px"},
                                     style_header={"fontWeight": 700},
+                                    sort_action="native",
+                                    sort_mode="multi",
+                                    filter_action="native",
                                     page_action="none",
                                 ),
                             ],
@@ -1362,6 +1386,9 @@ app.layout = html.Div(
                                     style_table={"overflowX": "auto"},
                                     style_cell={"fontSize": "12px", "padding": "6px"},
                                     style_header={"fontWeight": 700},
+                                    sort_action="native",
+                                    sort_mode="multi",
+                                    filter_action="native",
                                     page_action="none",
                                 ),
                             ],
@@ -1399,6 +1426,19 @@ def toggle_key_branch_panels(key_branch_toggle):
         {"display": display, "border": "1px solid #e5e7eb", "borderRadius": "10px", "padding": "10px"},
         {"display": display, "border": "1px solid #e5e7eb", "borderRadius": "10px", "padding": "10px"},
     )
+
+
+@app.callback(
+    Output("key-case-overview-table", "data"),
+    Input("key-case-limit", "value"),
+)
+def update_key_case_overview(limit_value):
+    try:
+        limit = int(limit_value or 0)
+    except (TypeError, ValueError):
+        limit = 0
+    cases = load_key_branch_cases()
+    return format_case_table(cases, limit=limit if limit > 0 else None)
 
 
 @app.callback(
