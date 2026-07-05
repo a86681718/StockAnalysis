@@ -82,6 +82,10 @@ def _risk_label(score: float) -> str:
     return "暫不追價"
 
 
+def _detail_path(rank: object, symbol: str, broker: str, episode_start: object) -> str:
+    return f"all_cases/{int(_num(rank)):04d}_{symbol}_{broker}_{_date(episode_start)}.md"
+
+
 def _load_stock_names(paths: tuple[Path, ...]) -> dict[str, str]:
     profiles = load_company_profiles(paths)
     if profiles.empty:
@@ -395,6 +399,10 @@ def _build_universe_index(trigger_gt5: pd.DataFrame, selected: pd.DataFrame) -> 
         ],
         default="historical_or_ended_episode",
     )
+    out["detail_path"] = [
+        _detail_path(rank, symbol, broker, start)
+        for rank, symbol, broker, start in zip(out["rank"], out["symbol"], out["broker"], out["episode_start"])
+    ]
     keep = [
         "rank",
         "symbol",
@@ -415,6 +423,7 @@ def _build_universe_index(trigger_gt5: pd.DataFrame, selected: pd.DataFrame) -> 
         "review_eligible",
         "selected_for_detail",
         "scope_note",
+        "detail_path",
     ]
     return out[keep].sort_values(["selected_for_detail", "rank"], ascending=[False, True]).reset_index(drop=True)
 
@@ -427,7 +436,12 @@ def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[st
     eligible_gt5 = trigger_gt5[trigger_gt5["review_eligible"]].copy()
     selected = eligible_gt5.sort_values(["rank"]).head(cfg.max_cases).reset_index(drop=True)
     universe = _build_universe_index(trigger_gt5, selected)
-    symbols = set(selected["symbol"].astype(str))
+    universe_by_key = {
+        (str(row.symbol), str(row.broker), _date(row.episode_start)): row
+        for row in universe.itertuples(index=False)
+    }
+    review_rows = trigger_gt5.sort_values(["review_eligible", "ongoing", "rank"], ascending=[False, False, True]).reset_index(drop=True)
+    symbols = set(review_rows["symbol"].astype(str))
     stock_names = _load_stock_names(cfg.company_profile_paths)
     broker_lookup = load_broker_lookup(cfg.broker_list_path)
     broker_cities = _load_broker_cities(cfg.broker_list_path)
@@ -439,10 +453,12 @@ def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[st
     news_cache = _load_news_cache(news_cache_path)
 
     cases: list[dict[str, object]] = []
-    for row in selected.itertuples(index=False):
+    for row in review_rows.itertuples(index=False):
         symbol = str(row.symbol)
         start = pd.Timestamp(row.episode_start)
         end = pd.Timestamp(row.last_qualifying_date)
+        key = (symbol, str(row.broker), _date(start))
+        universe_row = universe_by_key[key]
         frames = [read_broker_parquet(path, start, end) for path in parquet_index.get(symbol, [])]
         raw = pd.concat([frame for frame in frames if not frame.empty], ignore_index=True) if frames else pd.DataFrame()
         trend = _trend_snapshot(ohlc, symbol, end)
@@ -452,14 +468,25 @@ def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[st
         news_items = _news_items_for_case(symbol, name, cfg, news_cache)
         row_series = pd.Series(row._asdict())
         score, positives, risks = _score_case(row_series, trend, broker_stats, general_hit)
+        if not bool(row.ongoing):
+            score = min(score, 1.5)
+            risks.insert(0, "episode 已結束，僅供回顧，不作為當前買進候選")
+        elif not bool(row.review_eligible):
+            score = min(score, 1.9)
+            risks.insert(0, "未通過 review_eligible gate，需等訊號延續或品質改善")
         case = {
             "rank": int(row.rank),
             "symbol": symbol,
             "name": name,
             "broker": str(row.broker),
             "broker_name": str(row.broker_name),
+            "scope_note": str(universe_row.scope_note),
+            "selected_for_detail": bool(universe_row.selected_for_detail),
+            "review_eligible": bool(row.review_eligible),
+            "ongoing": bool(row.ongoing),
             "episode_start": _date(start),
             "last_qualifying_date": _date(end),
+            "status_as_of": _date(row.status_as_of),
             "status": str(row.status),
             "confidence": str(row.confidence),
             "trigger_days": int(row.qualifying_dates),
@@ -478,7 +505,7 @@ def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[st
             "risks": risks,
             "news_items": news_items,
             "news_links": _news_links(symbol, name),
-            "detail_path": f"cases/{symbol}_{row.broker}_{_date(start)}.md",
+            "detail_path": str(universe_row.detail_path),
         }
         cases.append(case)
     if cfg.fetch_news:
@@ -489,6 +516,7 @@ def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[st
         "min_trigger_days": cfg.min_trigger_days,
         "total_trigger_gt5_episodes": int(len(trigger_gt5)),
         "review_eligible_trigger_gt5_episodes": int(len(eligible_gt5)),
+        "selected_actionable_cases": int(len(selected)),
         "case_count": len(cases),
         "latest_signal_date": max((case["last_qualifying_date"] for case in cases), default=""),
         "decision_counts": dict(pd.Series([case["decision"] for case in cases]).value_counts()) if cases else {},
@@ -501,13 +529,16 @@ def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[st
 
 
 def write_detail_reports(cases: list[dict[str, object]], out_dir: Path, limit: int) -> None:
-    case_dir = ensure_dir(out_dir / "cases")
-    for case in cases[:limit]:
+    case_dir = ensure_dir(out_dir / "all_cases")
+    selected_cases = cases if limit <= 0 else cases[:limit]
+    for case in selected_cases:
         lines = [
             f"# {case['symbol']} {case['name']} - 觸發天數 > 5 案例分析",
             "",
             f"- 評估結論: **{case['decision']}** (score `{case['score']}`)",
+            f"- 案例分類: `{case['scope_note']}`; review eligible `{'yes' if case['review_eligible'] else 'no'}`; ongoing `{'yes' if case['ongoing'] else 'no'}`",
             f"- 案例期間: `{case['episode_start']}` ~ `{case['last_qualifying_date']}`; trigger days `{case['trigger_days']}`",
+            f"- 狀態基準日: `{case['status_as_of']}`; episode status `{case['status']}`",
             f"- 主分點: `{case['broker_name']}` (`{case['broker']}`)",
             "",
             "## 分析面向",
@@ -576,6 +607,7 @@ def write_review_report(cases: list[dict[str, object]], summary: dict[str, objec
         f"- Trigger threshold: `qualifying_dates > {summary['min_trigger_days']}`",
         f"- Total trigger-days cases in source: `{summary['total_trigger_gt5_episodes']}`",
         f"- Review-eligible trigger-days cases: `{summary['review_eligible_trigger_gt5_episodes']}`",
+        f"- Selected actionable/current cases: `{summary['selected_actionable_cases']}`",
         f"- Cases written here: `{summary['case_count']}`",
         f"- Latest signal date: `{summary['latest_signal_date']}`",
         f"- News status: `{summary['news_status']}`",
@@ -625,9 +657,9 @@ def _html_page(cases: list[dict[str, object]], summary: dict[str, object]) -> st
         return f"<a href=\"{url}\">{title}</a>{suffix}"
 
     rows = "\n".join(
-        f"<tr data-decision=\"{html.escape(case['decision'])}\">"
+        f"<tr data-decision=\"{html.escape(case['decision'])}\" data-scope=\"{html.escape(case['scope_note'])}\">"
         f"<td>{case['rank']}</td><td><a href=\"{html.escape(case['detail_path'])}\">{case['symbol']} {html.escape(case['name'])}</a></td>"
-        f"<td>{html.escape(case['broker_name'])}</td><td>{case['trigger_days']}</td><td>{case['score']}</td>"
+        f"<td>{html.escape(case['broker_name'])}</td><td>{html.escape(case['scope_note'])}</td><td>{case['trigger_days']}</td><td>{case['score']}</td>"
         f"<td>{html.escape(case['decision'])}</td><td>{_fmt_pct(case['cumulative_purity'])}</td>"
         f"<td>{_fmt_pct(case['cumulative_buy_share'])}</td><td>{case['trend']['short_trend']} / {case['trend']['mid_trend']} / {case['trend']['long_trend']}</td>"
         f"<td>{html.escape(case['broker_stats']['dominant_city'] or '')} {_fmt_pct(case['broker_stats']['dominant_city_share'])}</td>"
@@ -667,6 +699,7 @@ def _html_page(cases: list[dict[str, object]], summary: dict[str, object]) -> st
     <p class="note">入口頁先用可重現的本地量化欄位排序，每個案例可點入 markdown 細報。最近新聞欄位來自 Google News RSS，只作為人工確認線索。完整 {summary.get("total_trigger_gt5_episodes", 0)} 筆觸發天數案例另存於 <a href="all_trigger_gt5_cases.csv">all_trigger_gt5_cases.csv</a>。</p>
     <section class="grid">
       <div class="metric">案例數<b>{summary.get("case_count", 0)}</b></div>
+      <div class="metric">當前可審<b>{summary.get("selected_actionable_cases", 0)}</b></div>
       <div class="metric">觸發門檻<b>&gt; {summary.get("min_trigger_days", "")}</b></div>
       <div class="metric">可列入觀察<b>{summary.get("decision_counts", {}).get("可列入買進觀察", 0)}</b></div>
       <div class="metric">有新聞線索<b>{summary.get("cases_with_news", 0)}</b></div>
@@ -679,9 +712,16 @@ def _html_page(cases: list[dict[str, object]], summary: dict[str, object]) -> st
         <option>觀察但需等確認</option>
         <option>暫不追價</option>
       </select>
+      <select id="scope">
+        <option value="">全部分類</option>
+        <option>detailed_review_case</option>
+        <option>review_eligible_beyond_limit</option>
+        <option>ongoing_but_not_review_eligible</option>
+        <option>historical_or_ended_episode</option>
+      </select>
     </div>
     <table id="cases">
-      <thead><tr><th>Rank</th><th>案例</th><th>主分點</th><th>觸發</th><th>Score</th><th>結論</th><th>純度</th><th>買量占比</th><th>短/中/長趨勢</th><th>城市群聚</th><th>左手警示</th><th>最近新聞</th></tr></thead>
+      <thead><tr><th>Rank</th><th>案例</th><th>主分點</th><th>分類</th><th>觸發</th><th>Score</th><th>結論</th><th>純度</th><th>買量占比</th><th>短/中/長趨勢</th><th>城市群聚</th><th>左手警示</th><th>最近新聞</th></tr></thead>
       <tbody>{rows}</tbody>
     </table>
   </main>
@@ -689,17 +729,20 @@ def _html_page(cases: list[dict[str, object]], summary: dict[str, object]) -> st
   <script>
     const q = document.getElementById('q');
     const decision = document.getElementById('decision');
+    const scope = document.getElementById('scope');
     const rows = [...document.querySelectorAll('#cases tbody tr')];
     function filter() {{
       const term = q.value.trim().toLowerCase();
       const dec = decision.value;
+      const scopeValue = scope.value;
       rows.forEach(row => {{
         const text = row.textContent.toLowerCase();
-        row.style.display = (!term || text.includes(term)) && (!dec || row.dataset.decision === dec) ? '' : 'none';
+        row.style.display = (!term || text.includes(term)) && (!dec || row.dataset.decision === dec) && (!scopeValue || row.dataset.scope === scopeValue) ? '' : 'none';
       }});
     }}
     q.addEventListener('input', filter);
     decision.addEventListener('change', filter);
+    scope.addEventListener('change', filter);
   </script>
 </body>
 </html>
@@ -736,7 +779,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=resolve_output("analysis", "trigger_days_gt5_case_review"))
     parser.add_argument("--min-trigger-days", type=int, default=5)
     parser.add_argument("--max-cases", type=int, default=274)
-    parser.add_argument("--detail-case-limit", type=int, default=274)
+    parser.add_argument("--detail-case-limit", type=int, default=0, help="Maximum detail reports to write; 0 writes every trigger-days case.")
     parser.add_argument("--skip-news", action="store_true", help="Do not fetch Google News RSS headlines.")
     parser.add_argument("--max-news-items", type=int, default=3)
     parser.add_argument("--news-timeout-seconds", type=float, default=8.0)
