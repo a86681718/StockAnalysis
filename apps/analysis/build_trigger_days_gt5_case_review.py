@@ -83,7 +83,7 @@ def _risk_label(score: float) -> str:
 
 
 def _detail_path(rank: object, symbol: str, broker: str, episode_start: object) -> str:
-    return f"all_cases/{int(_num(rank)):04d}_{symbol}_{broker}_{_date(episode_start)}.md"
+    return f"all_cases/{int(_num(rank)):04d}_{symbol}_{broker}_{_date(episode_start)}.html"
 
 
 def _load_stock_names(paths: tuple[Path, ...]) -> dict[str, str]:
@@ -146,6 +146,68 @@ def _trend_snapshot(ohlc: pd.DataFrame, symbol: str, as_of: pd.Timestamp) -> dic
         "ret60": _num(latest.get("ret60"), math.nan),
         "price_position_60": _num(latest.get("price_position_60"), math.nan),
     }
+
+
+def _ohlc_chart_rows(ohlc: pd.DataFrame, symbol: str, start: pd.Timestamp, end: pd.Timestamp) -> list[dict[str, object]]:
+    symbol_ohlc = ohlc[ohlc["symbol"] == symbol].copy()
+    before = symbol_ohlc[symbol_ohlc["date"] < start].tail(60)
+    during = symbol_ohlc[(symbol_ohlc["date"] >= start) & (symbol_ohlc["date"] <= end)]
+    after = symbol_ohlc[symbol_ohlc["date"] > end].head(10)
+    window = pd.concat([before, during, after], ignore_index=True)
+    rows: list[dict[str, object]] = []
+    for row in window.itertuples(index=False):
+        date = pd.Timestamp(row.date)
+        rows.append(
+            {
+                "date": _date(date),
+                "open": _num(row.open, math.nan),
+                "high": _num(row.high, math.nan),
+                "low": _num(row.low, math.nan),
+                "close": _num(row.close, math.nan),
+                "volume": _num(row.volume, math.nan),
+                "ma5": _num(getattr(row, "ma5", np.nan), math.nan),
+                "ma20": _num(getattr(row, "ma20", np.nan), math.nan),
+                "ma60": _num(getattr(row, "ma60", np.nan), math.nan),
+                "in_episode": bool(start <= date <= end),
+            }
+        )
+    return rows
+
+
+def _broker_daily_rows(raw: pd.DataFrame, target_broker: str) -> list[dict[str, object]]:
+    if raw.empty:
+        return []
+    work = raw.copy()
+    work["date"] = pd.to_datetime(work["date"], errors="coerce").dt.normalize()
+    work["net_buy"] = work["buy_volume"] - work["sell_volume"]
+    target = work[work["broker"] == target_broker].groupby("date", as_index=False).agg(
+        target_buy=("buy_volume", "sum"),
+        target_sell=("sell_volume", "sum"),
+        target_net=("net_buy", "sum"),
+        target_buy_amount=("buy_amount", "sum"),
+    )
+    total = work.groupby("date", as_index=False).agg(
+        market_buy=("buy_volume", "sum"),
+        market_sell=("sell_volume", "sum"),
+        market_net=("net_buy", "sum"),
+    )
+    daily = total.merge(target, on="date", how="left").fillna(0).sort_values("date")
+    rows: list[dict[str, object]] = []
+    for row in daily.itertuples(index=False):
+        avg_price = row.target_buy_amount / row.target_buy if row.target_buy > 0 else np.nan
+        rows.append(
+            {
+                "date": _date(row.date),
+                "target_buy": float(row.target_buy),
+                "target_sell": float(row.target_sell),
+                "target_net": float(row.target_net),
+                "target_avg_buy_price": float(avg_price) if not pd.isna(avg_price) else None,
+                "market_buy": float(row.market_buy),
+                "market_sell": float(row.market_sell),
+                "market_net": float(row.market_net),
+            }
+        )
+    return rows
 
 
 def _broker_window_stats(
@@ -370,6 +432,11 @@ def _json_default(value: object) -> object:
     return str(value)
 
 
+def _slim_cases(cases: list[dict[str, object]]) -> list[dict[str, object]]:
+    heavy_keys = {"ohlc_chart", "broker_daily"}
+    return [{key: value for key, value in case.items() if key not in heavy_keys} for case in cases]
+
+
 def _build_universe_index(trigger_gt5: pd.DataFrame, selected: pd.DataFrame) -> pd.DataFrame:
     selected_keys = set(
         zip(
@@ -462,6 +529,8 @@ def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[st
         frames = [read_broker_parquet(path, start, end) for path in parquet_index.get(symbol, [])]
         raw = pd.concat([frame for frame in frames if not frame.empty], ignore_index=True) if frames else pd.DataFrame()
         trend = _trend_snapshot(ohlc, symbol, end)
+        chart_rows = _ohlc_chart_rows(ohlc, symbol, start, end)
+        broker_daily = _broker_daily_rows(raw, str(row.broker))
         broker_stats = _broker_window_stats(raw, broker_lookup, broker_cities, str(row.broker))
         name = stock_names.get(symbol, "")
         general_hit = symbol in general_hits
@@ -497,6 +566,8 @@ def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[st
             "cumulative_buy_share": float(row.cumulative_buy_share),
             "retention_ratio": float(row.retention_ratio),
             "trend": trend,
+            "ohlc_chart": chart_rows,
+            "broker_daily": broker_daily,
             "broker_stats": broker_stats,
             "general_flow_hit": general_hit,
             "score": round(score, 2),
@@ -528,73 +599,323 @@ def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[st
     return cases, summary, universe
 
 
+def _escape(value: object) -> str:
+    return html.escape("" if value is None else str(value))
+
+
+def _metric(label: str, value: str, subtext: str = "") -> str:
+    sub = f"<span>{_escape(subtext)}</span>" if subtext else ""
+    return f"<div class=\"metric\"><label>{_escape(label)}</label><b>{_escape(value)}</b>{sub}</div>"
+
+
+def _candlestick_svg(rows: list[dict[str, object]]) -> str:
+    if not rows:
+        return "<div class=\"empty\">沒有可繪製的 OHLC 資料。</div>"
+    width = 1120
+    height = 420
+    left = 56
+    right = 18
+    top = 20
+    price_bottom = 285
+    volume_top = 320
+    bottom = 392
+    chart_width = width - left - right
+    price_values = [
+        _num(row[field], math.nan)
+        for row in rows
+        for field in ("open", "high", "low", "close", "ma5", "ma20", "ma60")
+        if not math.isnan(_num(row[field], math.nan))
+    ]
+    if not price_values:
+        return "<div class=\"empty\">沒有可繪製的價格資料。</div>"
+    low = min(price_values)
+    high = max(price_values)
+    pad = max((high - low) * 0.08, 0.01)
+    low -= pad
+    high += pad
+    max_volume = max((_num(row["volume"], 0.0) for row in rows), default=0.0) or 1.0
+    step = chart_width / max(len(rows), 1)
+    candle_width = max(2.0, min(8.0, step * 0.58))
+
+    def x_pos(index: int) -> float:
+        return left + index * step + step / 2
+
+    def y_price(value: object) -> float:
+        number = _num(value, math.nan)
+        if math.isnan(number):
+            return math.nan
+        return top + (high - number) / (high - low) * (price_bottom - top)
+
+    def y_volume(value: object) -> float:
+        return bottom - (_num(value, 0.0) / max_volume) * (bottom - volume_top)
+
+    grid_lines: list[str] = []
+    for ratio in (0, 0.25, 0.5, 0.75, 1.0):
+        y = top + ratio * (price_bottom - top)
+        price = high - ratio * (high - low)
+        grid_lines.append(
+            f"<line x1=\"{left}\" y1=\"{y:.1f}\" x2=\"{width - right}\" y2=\"{y:.1f}\" class=\"grid-line\"/>"
+            f"<text x=\"8\" y=\"{y + 4:.1f}\" class=\"axis-label\">{price:.2f}</text>"
+        )
+
+    in_episode_indexes = [idx for idx, row in enumerate(rows) if row.get("in_episode")]
+    episode_rect = ""
+    if in_episode_indexes:
+        start_x = left + min(in_episode_indexes) * step
+        end_x = left + (max(in_episode_indexes) + 1) * step
+        episode_rect = f"<rect x=\"{start_x:.1f}\" y=\"{top}\" width=\"{max(end_x - start_x, step):.1f}\" height=\"{price_bottom - top}\" class=\"episode-band\"/>"
+
+    candles: list[str] = []
+    volumes: list[str] = []
+    for idx, row in enumerate(rows):
+        x = x_pos(idx)
+        open_y = y_price(row["open"])
+        high_y = y_price(row["high"])
+        low_y = y_price(row["low"])
+        close_y = y_price(row["close"])
+        if any(math.isnan(value) for value in (open_y, high_y, low_y, close_y)):
+            continue
+        up = _num(row["close"]) >= _num(row["open"])
+        klass = "up" if up else "down"
+        body_y = min(open_y, close_y)
+        body_h = max(abs(close_y - open_y), 1.2)
+        title = _escape(
+            f"{row['date']} O:{_fmt_float(row['open'])} H:{_fmt_float(row['high'])} "
+            f"L:{_fmt_float(row['low'])} C:{_fmt_float(row['close'])}"
+        )
+        candles.append(
+            f"<g><title>{title}</title><line x1=\"{x:.1f}\" y1=\"{high_y:.1f}\" x2=\"{x:.1f}\" y2=\"{low_y:.1f}\" class=\"wick {klass}\"/>"
+            f"<rect x=\"{x - candle_width / 2:.1f}\" y=\"{body_y:.1f}\" width=\"{candle_width:.1f}\" height=\"{body_h:.1f}\" class=\"candle {klass}\"/></g>"
+        )
+        vol_y = y_volume(row["volume"])
+        volumes.append(
+            f"<rect x=\"{x - candle_width / 2:.1f}\" y=\"{vol_y:.1f}\" width=\"{candle_width:.1f}\" height=\"{bottom - vol_y:.1f}\" class=\"volume {klass}\"/>"
+        )
+
+    def ma_polyline(field: str, klass: str) -> str:
+        points = []
+        for idx, row in enumerate(rows):
+            y = y_price(row.get(field))
+            if not math.isnan(y):
+                points.append(f"{x_pos(idx):.1f},{y:.1f}")
+        if len(points) < 2:
+            return ""
+        return f"<polyline points=\"{' '.join(points)}\" class=\"ma {klass}\"/>"
+
+    first_label = _escape(rows[0]["date"])
+    last_label = _escape(rows[-1]["date"])
+    return (
+        f"<svg class=\"kchart\" viewBox=\"0 0 {width} {height}\" role=\"img\" aria-label=\"OHLC candlestick chart\">"
+        f"<rect x=\"0\" y=\"0\" width=\"{width}\" height=\"{height}\" class=\"chart-bg\"/>"
+        f"{episode_rect}{''.join(grid_lines)}"
+        f"<line x1=\"{left}\" y1=\"{volume_top}\" x2=\"{width - right}\" y2=\"{volume_top}\" class=\"volume-line\"/>"
+        f"{''.join(volumes)}{''.join(candles)}"
+        f"{ma_polyline('ma5', 'ma5')}{ma_polyline('ma20', 'ma20')}{ma_polyline('ma60', 'ma60')}"
+        f"<text x=\"{left}\" y=\"412\" class=\"axis-label\">{first_label}</text>"
+        f"<text x=\"{width - right - 82}\" y=\"412\" class=\"axis-label\">{last_label}</text>"
+        "</svg>"
+    )
+
+
+def _case_detail_html(case: dict[str, object]) -> str:
+    trend = case["trend"]
+    broker_stats = case["broker_stats"]
+    chart = _candlestick_svg(case.get("ohlc_chart", []))
+    news_items = case.get("news_items") or []
+    news_html = "\n".join(
+        f"<li><a href=\"{_escape(item.get('url', ''))}\">{_escape(item.get('title', ''))}</a>"
+        f"<span>{_escape(item.get('source', ''))} {_escape(item.get('published', ''))}</span></li>"
+        for item in news_items
+    ) or "<li>未擷取到 Google News RSS 標題；請使用新聞入口人工查核。</li>"
+    news_links = "\n".join(
+        f"<a href=\"{_escape(link['url'])}\">{_escape(link['label'])}</a>"
+        for link in case.get("news_links", [])
+    )
+    top_brokers = "\n".join(
+        "<tr>"
+        f"<td>{_escape(broker['broker_name'])}</td>"
+        f"<td>{_escape(broker.get('broker_city') or 'n/a')}</td>"
+        f"<td class=\"num\">{_fmt_int(broker['net_buy'])}</td>"
+        f"<td class=\"num\">{_fmt_float(broker.get('avg_buy_price'))}</td>"
+        "</tr>"
+        for broker in broker_stats["top_brokers"]
+    ) or "<tr><td colspan=\"4\">n/a</td></tr>"
+    broker_daily = "\n".join(
+        "<tr>"
+        f"<td>{_escape(row['date'])}</td>"
+        f"<td class=\"num\">{_fmt_int(row['target_buy'])}</td>"
+        f"<td class=\"num\">{_fmt_int(row['target_sell'])}</td>"
+        f"<td class=\"num {'pos' if _num(row['target_net']) >= 0 else 'neg'}\">{_fmt_int(row['target_net'])}</td>"
+        f"<td class=\"num\">{_fmt_float(row['target_avg_buy_price'])}</td>"
+        f"<td class=\"num {'pos' if _num(row['market_net']) >= 0 else 'neg'}\">{_fmt_int(row['market_net'])}</td>"
+        "</tr>"
+        for row in case.get("broker_daily", [])
+    ) or "<tr><td colspan=\"6\">n/a</td></tr>"
+    ohlc_rows = "\n".join(
+        "<tr>"
+        f"<td>{_escape(row['date'])}</td>"
+        f"<td>{'yes' if row.get('in_episode') else ''}</td>"
+        f"<td class=\"num\">{_fmt_float(row['open'])}</td>"
+        f"<td class=\"num\">{_fmt_float(row['high'])}</td>"
+        f"<td class=\"num\">{_fmt_float(row['low'])}</td>"
+        f"<td class=\"num\">{_fmt_float(row['close'])}</td>"
+        f"<td class=\"num\">{_fmt_int(row['volume'])}</td>"
+        f"<td class=\"num\">{_fmt_float(row['ma5'])}</td>"
+        f"<td class=\"num\">{_fmt_float(row['ma20'])}</td>"
+        f"<td class=\"num\">{_fmt_float(row['ma60'])}</td>"
+        "</tr>"
+        for row in case.get("ohlc_chart", [])
+    ) or "<tr><td colspan=\"10\">n/a</td></tr>"
+    positives = "\n".join(f"<li>{_escape(item)}</li>" for item in case["positives"]) or "<li>無明顯正面加分。</li>"
+    risks = "\n".join(f"<li>{_escape(item)}</li>" for item in case["risks"]) or "<li>未觸發主要量化風險。</li>"
+    return f"""<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{_escape(case['symbol'])} {_escape(case['name'])} 觸發天數案例分析</title>
+  <style>
+    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #172033; background: #f4f6f8; }}
+    header {{ background: #111827; color: white; padding: 22px 28px; }}
+    main {{ padding: 20px 28px 40px; }}
+    h1 {{ margin: 0 0 8px; font-size: 26px; }}
+    h2 {{ margin: 0 0 12px; font-size: 18px; }}
+    a {{ color: #0b5cad; text-decoration: none; }}
+    .back {{ color: #b7c7df; display: inline-block; margin-bottom: 14px; }}
+    .meta {{ color: #c9d3e4; line-height: 1.5; }}
+    .layout {{ display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 18px; align-items: start; }}
+    section {{ background: white; border: 1px solid #dfe5ee; border-radius: 8px; padding: 16px; margin-bottom: 16px; }}
+    .metrics {{ display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 10px; margin-bottom: 16px; }}
+    .metric {{ border: 1px solid #dfe5ee; border-radius: 8px; padding: 12px; background: #fbfcfe; min-height: 74px; }}
+    .metric label {{ display: block; font-size: 12px; color: #637083; }}
+    .metric b {{ display: block; font-size: 21px; margin-top: 5px; }}
+    .metric span {{ display: block; font-size: 12px; color: #637083; margin-top: 4px; }}
+    .decision {{ display: inline-flex; align-items: center; padding: 5px 9px; border-radius: 999px; background: #e8f3ff; color: #064f8f; font-weight: 700; }}
+    .chart-wrap {{ overflow-x: auto; }}
+    .kchart {{ min-width: 900px; width: 100%; height: auto; display: block; }}
+    .chart-bg {{ fill: #fbfcfe; }}
+    .grid-line {{ stroke: #e3e8ef; stroke-width: 1; }}
+    .volume-line {{ stroke: #cbd5e1; stroke-width: 1; }}
+    .episode-band {{ fill: #fff4c2; opacity: 0.75; }}
+    .wick.up, .candle.up {{ stroke: #c2410c; fill: #ef4444; }}
+    .wick.down, .candle.down {{ stroke: #047857; fill: #10b981; }}
+    .volume.up {{ fill: #fecaca; }}
+    .volume.down {{ fill: #bbf7d0; }}
+    .ma {{ fill: none; stroke-width: 1.8; opacity: 0.95; }}
+    .ma5 {{ stroke: #2563eb; }}
+    .ma20 {{ stroke: #7c3aed; }}
+    .ma60 {{ stroke: #f59e0b; }}
+    .axis-label {{ fill: #64748b; font-size: 12px; }}
+    .legend {{ display: flex; gap: 14px; flex-wrap: wrap; color: #526173; font-size: 13px; margin-top: 8px; }}
+    .legend i {{ display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin-right: 5px; }}
+    .table-wrap {{ max-height: 440px; overflow: auto; border: 1px solid #e5eaf1; }}
+    table {{ width: 100%; border-collapse: collapse; background: white; }}
+    th, td {{ padding: 8px 10px; border-bottom: 1px solid #edf1f6; font-size: 13px; text-align: left; white-space: nowrap; }}
+    th {{ position: sticky; top: 0; background: #eef2f7; z-index: 1; }}
+    .num {{ text-align: right; font-variant-numeric: tabular-nums; }}
+    .pos {{ color: #b42318; }}
+    .neg {{ color: #047857; }}
+    .split {{ display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }}
+    ul {{ margin: 0; padding-left: 18px; }}
+    li {{ margin: 6px 0; }}
+    .news li span {{ display: block; color: #64748b; font-size: 12px; margin-top: 2px; }}
+    .links {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }}
+    .links a {{ border: 1px solid #cfd8e6; border-radius: 6px; padding: 7px 9px; background: #fbfcfe; }}
+    .empty {{ color: #64748b; padding: 20px; border: 1px dashed #cbd5e1; border-radius: 8px; }}
+    @media (max-width: 980px) {{
+      main {{ padding: 14px; }}
+      .layout, .split {{ grid-template-columns: 1fr; }}
+      .metrics {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+    }}
+  </style>
+</head>
+<body>
+  <header>
+    <a class="back" href="../index.html">回到入口頁</a>
+    <h1>{_escape(case['symbol'])} {_escape(case['name'])} - 觸發天數 &gt; 5 案例分析</h1>
+    <div class="meta">
+      <span class="decision">{_escape(case['decision'])}</span>
+      score {_escape(case['score'])} · rank {_escape(case['rank'])} · {_escape(case['scope_note'])}<br>
+      episode {_escape(case['episode_start'])} ~ {_escape(case['last_qualifying_date'])} · 主分點 {_escape(case['broker_name'])} ({_escape(case['broker'])})
+    </div>
+  </header>
+  <main>
+    <div class="metrics">
+      {_metric("觸發天數", str(case["trigger_days"]), f"{case['positive_net_sessions']}/{case['observed_sessions']} 正買超天")}
+      {_metric("累積買超", f"{_fmt_int(case['cumulative_net_buy'])} 股", f"純度 {_fmt_pct(case['cumulative_purity'])}")}
+      {_metric("買量占比", _fmt_pct(case["cumulative_buy_share"]), f"留倉率 {_fmt_pct(case['retention_ratio'])}")}
+      {_metric("主分點均價", _fmt_float(broker_stats["target_avg_buy_price"]), f"收盤 {_fmt_float(trend['latest_close'])}")}
+      {_metric("短/中/長趨勢", f"{trend['short_trend']} / {trend['mid_trend']} / {trend['long_trend']}", f"5/20/60D {_fmt_pct(trend['ret5'])} / {_fmt_pct(trend['ret20'])} / {_fmt_pct(trend['ret60'])}")}
+      {_metric("城市群聚", broker_stats["dominant_city"] or "n/a", _fmt_pct(broker_stats["dominant_city_share"]))}
+      {_metric("左手換右手", "yes" if broker_stats["left_right_flag"] else "no", f"cross ratio {_fmt_pct(broker_stats['same_broker_cross_ratio'])}")}
+      {_metric("一般主力流交叉", "yes" if case["general_flow_hit"] else "no", f"狀態 {case['status']}")}
+    </div>
+    <div class="layout">
+      <div>
+        <section>
+          <h2>K 線與 episode 區間</h2>
+          <div class="chart-wrap">{chart}</div>
+          <div class="legend">
+            <span><i style="background:#2563eb"></i>MA5</span>
+            <span><i style="background:#7c3aed"></i>MA20</span>
+            <span><i style="background:#f59e0b"></i>MA60</span>
+            <span>黃色底色為 episode 對應時間</span>
+          </div>
+        </section>
+        <section>
+          <h2>主分點逐日買賣超</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Date</th><th>主分點買</th><th>主分點賣</th><th>主分點淨買</th><th>估計買均價</th><th>全分點淨買</th></tr></thead>
+              <tbody>{broker_daily}</tbody>
+            </table>
+          </div>
+        </section>
+        <section>
+          <h2>OHLC / MA 明細</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Date</th><th>Episode</th><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>Volume</th><th>MA5</th><th>MA20</th><th>MA60</th></tr></thead>
+              <tbody>{ohlc_rows}</tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+      <aside>
+        <section>
+          <h2>買進可能性摘要</h2>
+          <div class="split">
+            <div><b>正面依據</b><ul>{positives}</ul></div>
+            <div><b>風險與待查</b><ul>{risks}</ul></div>
+          </div>
+        </section>
+        <section>
+          <h2>Top 買超分點</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>分點</th><th>城市</th><th>淨買</th><th>均價</th></tr></thead>
+              <tbody>{top_brokers}</tbody>
+            </table>
+          </div>
+        </section>
+        <section>
+          <h2>最近新聞線索</h2>
+          <ul class="news">{news_html}</ul>
+          <div class="links">{news_links}</div>
+        </section>
+      </aside>
+    </div>
+  </main>
+</body>
+</html>
+"""
+
+
 def write_detail_reports(cases: list[dict[str, object]], out_dir: Path, limit: int) -> None:
     case_dir = ensure_dir(out_dir / "all_cases")
     selected_cases = cases if limit <= 0 else cases[:limit]
     for case in selected_cases:
-        lines = [
-            f"# {case['symbol']} {case['name']} - 觸發天數 > 5 案例分析",
-            "",
-            f"- 評估結論: **{case['decision']}** (score `{case['score']}`)",
-            f"- 案例分類: `{case['scope_note']}`; review eligible `{'yes' if case['review_eligible'] else 'no'}`; ongoing `{'yes' if case['ongoing'] else 'no'}`",
-            f"- 案例期間: `{case['episode_start']}` ~ `{case['last_qualifying_date']}`; trigger days `{case['trigger_days']}`",
-            f"- 狀態基準日: `{case['status_as_of']}`; episode status `{case['status']}`",
-            f"- 主分點: `{case['broker_name']}` (`{case['broker']}`)",
-            "",
-            "## 分析面向",
-            "",
-            "1. 新聞: 擷取 Google News RSS 最近標題作為新聞線索；利多利空仍需點進來源人工確認。",
-            "2. 主力買賣超力道: 看累積買超、純度、買量占比、正買超天數與是否同時出現在一般主力流異常。",
-            "3. 趨勢: 分短線 5/20 日、中線 20 日、長線 60 日與 60 日價格位置評估追價風險。",
-            "4. 券商群聚: 以買超券商地址城市估算是否集中同一縣市。",
-            "5. 均價: 用分點買進金額除以買進股數估算主分點均價，與最新收盤價比較。",
-            "6. 左手換右手: 用同分點買賣同時放大的 cross ratio 當作警示，不直接判定作假。",
-            "",
-            "## 量化摘要",
-            "",
-            f"- 累積買超: `{_fmt_int(case['cumulative_net_buy'])}` 股",
-            f"- 買超純度: `{_fmt_pct(case['cumulative_purity'])}`; 買量占比 `{_fmt_pct(case['cumulative_buy_share'])}`; 留倉率 `{_fmt_pct(case['retention_ratio'])}`",
-            f"- 正買超天數: `{case['positive_net_sessions']}/{case['observed_sessions']}`",
-            f"- 一般主力流異常交叉命中: `{'yes' if case['general_flow_hit'] else 'no'}`",
-            "",
-            "## 趨勢",
-            "",
-            f"- 最新收盤: `{_fmt_float(case['trend']['latest_close'])}`",
-            f"- 短線: `{case['trend']['short_trend']}`; 中線: `{case['trend']['mid_trend']}`; 長線: `{case['trend']['long_trend']}`",
-            f"- 5/20/60 日報酬: `{_fmt_pct(case['trend']['ret5'])}` / `{_fmt_pct(case['trend']['ret20'])}` / `{_fmt_pct(case['trend']['ret60'])}`",
-            f"- 60 日價格位置: `{_fmt_pct(case['trend']['price_position_60'])}`",
-            "",
-            "## 券商與均價",
-            "",
-            f"- 主分點估計買進均價: `{_fmt_float(case['broker_stats']['target_avg_buy_price'])}`",
-            f"- 主分點 episode 淨買超: `{_fmt_int(case['broker_stats']['target_net_buy'])}` 股",
-            f"- 買方最大城市: `{case['broker_stats']['dominant_city'] or 'n/a'}`; 城市占比 `{_fmt_pct(case['broker_stats']['dominant_city_share'])}`",
-            f"- 同分點買賣交叉比: `{_fmt_pct(case['broker_stats']['same_broker_cross_ratio'])}`; 左手換右手警示 `{'yes' if case['broker_stats']['left_right_flag'] else 'no'}`",
-            "",
-            "## Top 買超分點",
-            "",
-        ]
-        for broker in case["broker_stats"]["top_brokers"]:
-            lines.append(
-                f"- `{broker['broker_name']}` `{broker['broker_city'] or 'n/a'}` "
-                f"net=`{_fmt_int(broker['net_buy'])}` avg=`{_fmt_float(broker['avg_buy_price'])}`"
-            )
-        lines.extend(["", "## 正面依據", ""])
-        lines.extend([f"- {item}" for item in case["positives"]] or ["- 無明顯正面加分。"])
-        lines.extend(["", "## 風險與待查", ""])
-        lines.extend([f"- {item}" for item in case["risks"]] or ["- 未觸發主要量化風險。"])
-        lines.extend(["", "## 最近新聞線索", ""])
-        if case["news_items"]:
-            for item in case["news_items"]:
-                suffix = f" ({item['published']})" if item.get("published") else ""
-                source = f" - {item['source']}" if item.get("source") else ""
-                lines.append(f"- [{item['title']}]({item['url']}){source}{suffix}")
-        else:
-            lines.append("- 未擷取到 Google News RSS 標題；請使用下方入口人工查核。")
-        lines.extend(["", "## 新聞入口", ""])
-        for link in case["news_links"]:
-            lines.append(f"- [{link['label']}]({link['url']})")
-        (case_dir / Path(str(case["detail_path"])).name).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        (case_dir / Path(str(case["detail_path"])).name).write_text(_case_detail_html(case), encoding="utf-8")
 
 
 def write_review_report(cases: list[dict[str, object]], summary: dict[str, object], out_dir: Path) -> None:
@@ -644,7 +965,7 @@ def write_review_report(cases: list[dict[str, object]], summary: dict[str, objec
 
 
 def _html_page(cases: list[dict[str, object]], summary: dict[str, object]) -> str:
-    payload = json.dumps({"summary": summary, "cases": cases}, ensure_ascii=False, default=_json_default)
+    payload = json.dumps({"summary": summary, "cases": _slim_cases(cases)}, ensure_ascii=False, default=_json_default)
     def news_cell(case: dict[str, object]) -> str:
         items = case.get("news_items") or []
         if not items:
@@ -696,7 +1017,7 @@ def _html_page(cases: list[dict[str, object]], summary: dict[str, object]) -> st
     <div class="meta">資料來源: single_branch_persistent_accumulation + OHLC + broker branch parquet。最新訊號日: {html.escape(str(summary.get("latest_signal_date", "")))}</div>
   </header>
   <main>
-    <p class="note">入口頁先用可重現的本地量化欄位排序，每個案例可點入 markdown 細報。最近新聞欄位來自 Google News RSS，只作為人工確認線索。完整 {summary.get("total_trigger_gt5_episodes", 0)} 筆觸發天數案例另存於 <a href="all_trigger_gt5_cases.csv">all_trigger_gt5_cases.csv</a>。</p>
+    <p class="note">入口頁先用可重現的本地量化欄位排序，每個案例可點入 HTML 細報，細報包含 K 線、MA、episode 區間、逐日分點買賣超與新聞線索。最近新聞欄位來自 Google News RSS，只作為人工確認線索。完整 {summary.get("total_trigger_gt5_episodes", 0)} 筆觸發天數案例另存於 <a href="all_trigger_gt5_cases.csv">all_trigger_gt5_cases.csv</a>。</p>
     <section class="grid">
       <div class="metric">案例數<b>{summary.get("case_count", 0)}</b></div>
       <div class="metric">當前可審<b>{summary.get("selected_actionable_cases", 0)}</b></div>
@@ -756,11 +1077,12 @@ def write_outputs(
     cfg: CaseReviewConfig,
 ) -> None:
     out_dir = ensure_dir(cfg.output_dir)
+    slim_cases = _slim_cases(cases)
     (out_dir / "case_reviews.json").write_text(
-        json.dumps({"summary": summary, "cases": cases}, ensure_ascii=False, indent=2, default=_json_default),
+        json.dumps({"summary": summary, "cases": slim_cases}, ensure_ascii=False, indent=2, default=_json_default),
         encoding="utf-8",
     )
-    pd.DataFrame(cases).to_csv(out_dir / "case_reviews.csv", index=False, encoding="utf-8-sig")
+    pd.DataFrame(slim_cases).to_csv(out_dir / "case_reviews.csv", index=False, encoding="utf-8-sig")
     universe.to_csv(out_dir / "all_trigger_gt5_cases.csv", index=False, encoding="utf-8-sig")
     write_detail_reports(cases, out_dir, cfg.detail_case_limit)
     write_review_report(cases, summary, out_dir)
