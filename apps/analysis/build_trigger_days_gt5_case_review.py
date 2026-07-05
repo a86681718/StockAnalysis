@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import argparse
+from email.utils import parsedate_to_datetime
 import html
 import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote_plus
+import xml.etree.ElementTree as ET
 
 import numpy as np
 import pandas as pd
+import requests
 
 from stockanalysis.analysis.broker_branch_accumulation import (
     build_parquet_index,
@@ -33,6 +36,9 @@ class CaseReviewConfig:
     min_trigger_days: int
     max_cases: int
     detail_case_limit: int
+    fetch_news: bool
+    max_news_items: int
+    news_timeout_seconds: float
 
 
 def _num(value: object, default: float = 0.0) -> float:
@@ -278,6 +284,76 @@ def _news_links(symbol: str, name: str) -> list[dict[str, str]]:
     ]
 
 
+def _load_news_cache(path: Path) -> dict[str, list[dict[str, str]]]:
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): value for key, value in raw.items() if isinstance(value, list)}
+
+
+def _write_news_cache(path: Path, cache: dict[str, list[dict[str, str]]]) -> None:
+    ensure_dir(path.parent)
+    path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _news_cache_key(symbol: str, name: str) -> str:
+    return f"{symbol}:{name}"
+
+
+def _parse_rss_date(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        return parsedate_to_datetime(value).date().isoformat()
+    except (TypeError, ValueError, IndexError, AttributeError):
+        return ""
+
+
+def _fetch_google_news_items(symbol: str, name: str, max_items: int, timeout: float) -> list[dict[str, str]]:
+    query = f"{symbol} {name} 最新 新聞"
+    url = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+    response = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
+    response.raise_for_status()
+    root = ET.fromstring(response.content)
+    items: list[dict[str, str]] = []
+    for item in root.findall("./channel/item"):
+        source_node = item.find("source")
+        title = html.unescape((item.findtext("title") or "").strip())
+        source = html.unescape((source_node.text or "").strip()) if source_node is not None else ""
+        link = (item.findtext("link") or "").strip()
+        published = _parse_rss_date((item.findtext("pubDate") or "").strip())
+        if not title:
+            continue
+        items.append({"title": title, "source": source, "published": published, "url": link})
+        if len(items) >= max_items:
+            break
+    return items
+
+
+def _news_items_for_case(
+    symbol: str,
+    name: str,
+    cfg: CaseReviewConfig,
+    cache: dict[str, list[dict[str, str]]],
+) -> list[dict[str, str]]:
+    if not cfg.fetch_news:
+        return []
+    key = _news_cache_key(symbol, name)
+    if key in cache:
+        return cache[key]
+    try:
+        items = _fetch_google_news_items(symbol, name, cfg.max_news_items, cfg.news_timeout_seconds)
+    except (requests.RequestException, ET.ParseError):
+        items = []
+    cache[key] = items
+    return items
+
+
 def _json_default(value: object) -> object:
     if isinstance(value, (np.integer,)):
         return int(value)
@@ -305,6 +381,8 @@ def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[st
     parquet_index = build_parquet_index(cfg.broker_dirs)
     general = pd.read_parquet(cfg.general_cases_path)
     general_hits = set(general.loc[general["qualifying_dates"] > cfg.min_trigger_days, "symbol"].astype(str))
+    news_cache_path = cfg.output_dir / "news_cache.json"
+    news_cache = _load_news_cache(news_cache_path)
 
     cases: list[dict[str, object]] = []
     for row in selected.itertuples(index=False):
@@ -317,6 +395,7 @@ def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[st
         broker_stats = _broker_window_stats(raw, broker_lookup, broker_cities, str(row.broker))
         name = stock_names.get(symbol, "")
         general_hit = symbol in general_hits
+        news_items = _news_items_for_case(symbol, name, cfg, news_cache)
         row_series = pd.Series(row._asdict())
         score, positives, risks = _score_case(row_series, trend, broker_stats, general_hit)
         case = {
@@ -343,10 +422,13 @@ def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[st
             "decision": _risk_label(score),
             "positives": positives,
             "risks": risks,
+            "news_items": news_items,
             "news_links": _news_links(symbol, name),
             "detail_path": f"cases/{symbol}_{row.broker}_{_date(start)}.md",
         }
         cases.append(case)
+    if cfg.fetch_news:
+        _write_news_cache(news_cache_path, news_cache)
 
     summary = {
         "source": str(cfg.episodes_path),
@@ -356,7 +438,9 @@ def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[st
         "case_count": len(cases),
         "latest_signal_date": max((case["last_qualifying_date"] for case in cases), default=""),
         "decision_counts": dict(pd.Series([case["decision"] for case in cases]).value_counts()) if cases else {},
-        "news_status": "links_only_search_tool_returned_no_results",
+        "news_status": "google_news_rss" if cfg.fetch_news else "links_only_fetch_disabled",
+        "cases_with_news": sum(1 for case in cases if case["news_items"]),
+        "news_cache_path": str(news_cache_path) if cfg.fetch_news else "",
     }
     return cases, summary
 
@@ -373,7 +457,7 @@ def write_detail_reports(cases: list[dict[str, object]], out_dir: Path, limit: i
             "",
             "## 分析面向",
             "",
-            "1. 新聞: 使用下方新聞入口檢查最近公告、法說、營收、接單、處分與市場傳聞；本頁不把未人工確認的搜尋結果寫成利多或利空。",
+            "1. 新聞: 擷取 Google News RSS 最近標題作為新聞線索；利多利空仍需點進來源人工確認。",
             "2. 主力買賣超力道: 看累積買超、純度、買量占比、正買超天數與是否同時出現在一般主力流異常。",
             "3. 趨勢: 分短線 5/20 日、中線 20 日、長線 60 日與 60 日價格位置評估追價風險。",
             "4. 券商群聚: 以買超券商地址城市估算是否集中同一縣市。",
@@ -413,6 +497,14 @@ def write_detail_reports(cases: list[dict[str, object]], out_dir: Path, limit: i
         lines.extend([f"- {item}" for item in case["positives"]] or ["- 無明顯正面加分。"])
         lines.extend(["", "## 風險與待查", ""])
         lines.extend([f"- {item}" for item in case["risks"]] or ["- 未觸發主要量化風險。"])
+        lines.extend(["", "## 最近新聞線索", ""])
+        if case["news_items"]:
+            for item in case["news_items"]:
+                suffix = f" ({item['published']})" if item.get("published") else ""
+                source = f" - {item['source']}" if item.get("source") else ""
+                lines.append(f"- [{item['title']}]({item['url']}){source}{suffix}")
+        else:
+            lines.append("- 未擷取到 Google News RSS 標題；請使用下方入口人工查核。")
         lines.extend(["", "## 新聞入口", ""])
         for link in case["news_links"]:
             lines.append(f"- [{link['label']}]({link['url']})")
@@ -432,10 +524,12 @@ def write_review_report(cases: list[dict[str, object]], summary: dict[str, objec
         f"- Cases written here: `{summary['case_count']}`",
         f"- Latest signal date: `{summary['latest_signal_date']}`",
         f"- News status: `{summary['news_status']}`",
+        f"- Cases with RSS news items: `{summary['cases_with_news']}`",
+        f"- News cache: `{summary['news_cache_path'] or 'n/a'}`",
         "",
         "## Evaluation Facets",
         "",
-        "- News: per-case Google News, Yahoo stock news, and MOPS links. The current browser search tool returned no usable search results, so the reports do not hard-code unverified article summaries.",
+        "- News: per-case Google News RSS headlines plus Google News, Yahoo stock news, and MOPS links. Headlines are treated as leads, not confirmed bullish or bearish conclusions.",
         "- Main-force strength: cumulative net buy, purity, buy share, retention, positive sessions, and cross-hit with the general broker-flow anomaly list.",
         "- Trend: 5/20/60-session return, moving-average posture, and 60-session price position.",
         "- Broker clustering: positive-net-buy broker city concentration from broker address data.",
@@ -463,6 +557,17 @@ def write_review_report(cases: list[dict[str, object]], summary: dict[str, objec
 
 def _html_page(cases: list[dict[str, object]], summary: dict[str, object]) -> str:
     payload = json.dumps({"summary": summary, "cases": cases}, ensure_ascii=False, default=_json_default)
+    def news_cell(case: dict[str, object]) -> str:
+        items = case.get("news_items") or []
+        if not items:
+            return "n/a"
+        first = items[0]
+        title = html.escape(str(first.get("title", "")))
+        url = html.escape(str(first.get("url", "")))
+        published = html.escape(str(first.get("published", "")))
+        suffix = f"<br><span>{published}</span>" if published else ""
+        return f"<a href=\"{url}\">{title}</a>{suffix}"
+
     rows = "\n".join(
         f"<tr data-decision=\"{html.escape(case['decision'])}\">"
         f"<td>{case['rank']}</td><td><a href=\"{html.escape(case['detail_path'])}\">{case['symbol']} {html.escape(case['name'])}</a></td>"
@@ -470,7 +575,7 @@ def _html_page(cases: list[dict[str, object]], summary: dict[str, object]) -> st
         f"<td>{html.escape(case['decision'])}</td><td>{_fmt_pct(case['cumulative_purity'])}</td>"
         f"<td>{_fmt_pct(case['cumulative_buy_share'])}</td><td>{case['trend']['short_trend']} / {case['trend']['mid_trend']} / {case['trend']['long_trend']}</td>"
         f"<td>{html.escape(case['broker_stats']['dominant_city'] or '')} {_fmt_pct(case['broker_stats']['dominant_city_share'])}</td>"
-        f"<td>{'yes' if case['broker_stats']['left_right_flag'] else 'no'}</td></tr>"
+        f"<td>{'yes' if case['broker_stats']['left_right_flag'] else 'no'}</td><td>{news_cell(case)}</td></tr>"
         for case in cases
     )
     return f"""<!doctype html>
@@ -503,12 +608,12 @@ def _html_page(cases: list[dict[str, object]], summary: dict[str, object]) -> st
     <div class="meta">資料來源: single_branch_persistent_accumulation + OHLC + broker branch parquet。最新訊號日: {html.escape(str(summary.get("latest_signal_date", "")))}</div>
   </header>
   <main>
-    <p class="note">入口頁先用可重現的本地量化欄位排序，每個案例可點入 markdown 細報。新聞欄位提供即時搜尋入口；新聞內容需人工確認後再納入最終買進判斷。</p>
+    <p class="note">入口頁先用可重現的本地量化欄位排序，每個案例可點入 markdown 細報。最近新聞欄位來自 Google News RSS，只作為人工確認線索。</p>
     <section class="grid">
       <div class="metric">案例數<b>{summary.get("case_count", 0)}</b></div>
       <div class="metric">觸發門檻<b>&gt; {summary.get("min_trigger_days", "")}</b></div>
       <div class="metric">可列入觀察<b>{summary.get("decision_counts", {}).get("可列入買進觀察", 0)}</b></div>
-      <div class="metric">暫不追價<b>{summary.get("decision_counts", {}).get("暫不追價", 0)}</b></div>
+      <div class="metric">有新聞線索<b>{summary.get("cases_with_news", 0)}</b></div>
     </section>
     <div class="toolbar">
       <input id="q" placeholder="搜尋股票/分點/城市">
@@ -520,7 +625,7 @@ def _html_page(cases: list[dict[str, object]], summary: dict[str, object]) -> st
       </select>
     </div>
     <table id="cases">
-      <thead><tr><th>Rank</th><th>案例</th><th>主分點</th><th>觸發</th><th>Score</th><th>結論</th><th>純度</th><th>買量占比</th><th>短/中/長趨勢</th><th>城市群聚</th><th>左手警示</th></tr></thead>
+      <thead><tr><th>Rank</th><th>案例</th><th>主分點</th><th>觸發</th><th>Score</th><th>結論</th><th>純度</th><th>買量占比</th><th>短/中/長趨勢</th><th>城市群聚</th><th>左手警示</th><th>最近新聞</th></tr></thead>
       <tbody>{rows}</tbody>
     </table>
   </main>
@@ -570,6 +675,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-trigger-days", type=int, default=5)
     parser.add_argument("--max-cases", type=int, default=274)
     parser.add_argument("--detail-case-limit", type=int, default=274)
+    parser.add_argument("--skip-news", action="store_true", help="Do not fetch Google News RSS headlines.")
+    parser.add_argument("--max-news-items", type=int, default=3)
+    parser.add_argument("--news-timeout-seconds", type=float, default=8.0)
     return parser.parse_args()
 
 
@@ -587,6 +695,9 @@ def main() -> None:
         min_trigger_days=args.min_trigger_days,
         max_cases=args.max_cases,
         detail_case_limit=args.detail_case_limit,
+        fetch_news=not args.skip_news,
+        max_news_items=max(0, int(args.max_news_items)),
+        news_timeout_seconds=max(1.0, float(args.news_timeout_seconds)),
     )
     cases, summary = build_cases(cfg)
     write_outputs(cases, summary, cfg)
