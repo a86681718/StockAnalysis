@@ -1,10 +1,11 @@
 # Data Refresh Runbook
 
-This file records the current local execution flow for the three official data-refresh pipelines in this repo:
+This file records the current local execution flow for the official data-refresh steps in this repo:
 
-1. OHLC
-2. warrant dedup
-3. bs_report sync + ETL
+1. OHLC CSV
+2. derived OHLC parquet
+3. warrant dedup
+4. bs_report sync + ETL
 
 Use this as the default reference when you want to refresh local data yourself or when an agent needs to do it again later.
 
@@ -69,7 +70,39 @@ find data/ohlc -maxdepth 1 -type f -name 'twse-*.csv' | sed 's#data/ohlc/##' | s
 find data/ohlc -maxdepth 1 -type f -name 'tpex-*.csv' | sed 's#data/ohlc/##' | sort | tail -n 5
 ```
 
-## 2. Warrant Dedup
+## 2. Derived OHLC Parquet
+
+### Purpose
+
+Rebuild the normalized OHLC parquet used by the visualization app and strategy analysis:
+
+- `data/_derived/ohlc.parquet`
+
+The daily OHLC crawlers only write raw CSV files. Always rebuild this parquet after refreshing OHLC CSVs.
+
+### Entrypoint
+
+- `apps/etl/build_ohlc_parquet.py`
+
+### Normal execution
+
+```bash
+.venv/bin/python apps/etl/build_ohlc_parquet.py
+```
+
+### Verify output
+
+```bash
+.venv/bin/python - <<'PY'
+import pandas as pd
+df = pd.read_parquet('data/_derived/ohlc.parquet', columns=['symbol', 'date'])
+print('rows', len(df))
+print('symbols', df['symbol'].nunique())
+print('date_max', df['date'].max())
+PY
+```
+
+## 3. Warrant Dedup
 
 ### Purpose
 
@@ -121,7 +154,7 @@ PY
 
 If `rows == unique_code_name`, dedup is behaving as expected.
 
-## 3. bs_report Sync + ETL
+## 4. bs_report Sync + ETL
 
 ### Purpose
 
@@ -247,14 +280,16 @@ PY
 If the goal is a normal local data refresh for analysis:
 
 1. refresh OHLC
-2. refresh warrant dedup
-3. refresh `bs_report`
+2. rebuild `data/_derived/ohlc.parquet`
+3. refresh warrant dedup
+4. refresh `bs_report`
 
 Commands:
 
 ```bash
 .venv/bin/python apps/twse/crawler-twse-daily-ohlc.py
 .venv/bin/python apps/tpex/crawler-tpex-daily-ohlc.py
+.venv/bin/python apps/etl/build_ohlc_parquet.py
 .venv/bin/python apps/crawlers/Crawler_WarrantList.py
 .venv/bin/python apps/etl/run_bs_report_etl.py --market all --sync
 ```
@@ -269,7 +304,7 @@ Commands:
   - `parquet_twse`
   - `parquet_tpex`
 - Old processed folders may still exist in `inbox/` from prior runs. Manifest-aware sync prevents re-copying already successful dates, but `inbox/` may still need occasional cleanup if you want it visually tidy.
-- `data/_derived/ohlc.parquet` is not refreshed by the OHLC crawler itself. That is a downstream derived artifact and must be rebuilt separately if an analysis depends on it.
+- `data/_derived/ohlc.parquet` is not refreshed by the OHLC crawler itself. It is now a required runbook step immediately after OHLC CSV refresh.
 
 ## Current Baseline After Latest Refresh
 
