@@ -608,6 +608,11 @@ def _metric(label: str, value: str, subtext: str = "") -> str:
     return f"<div class=\"metric\"><label>{_escape(label)}</label><b>{_escape(value)}</b>{sub}</div>"
 
 
+def _html_json(data: object) -> str:
+    raw = json.dumps(data, ensure_ascii=False, default=_json_default)
+    return raw.replace("</", "<\\/")
+
+
 def _candlestick_svg(rows: list[dict[str, object]]) -> str:
     if not rows:
         return "<div class=\"empty\">沒有可繪製的 OHLC 資料。</div>"
@@ -717,10 +722,206 @@ def _candlestick_svg(rows: list[dict[str, object]]) -> str:
     )
 
 
+def _interactive_chart_html(case: dict[str, object]) -> str:
+    payload = {
+        "ohlc": case.get("ohlc_chart", []),
+        "brokerDaily": case.get("broker_daily", []),
+        "episodeStart": case["episode_start"],
+        "episodeEnd": case["last_qualifying_date"],
+        "brokerName": case["broker_name"],
+        "broker": case["broker"],
+    }
+    return f"""
+          <div class="chart-toolbar">
+            <button type="button" class="range-btn active" data-range="all">全部</button>
+            <button type="button" class="range-btn" data-range="episode">Episode</button>
+            <button type="button" class="range-btn" data-range="120">近 120 根</button>
+            <button type="button" class="range-btn" data-range="60">近 60 根</button>
+            <label class="toggle"><input type="checkbox" id="showBrokerBars" checked> 關鍵分點買賣</label>
+          </div>
+          <div class="interactive-chart" id="interactiveChart">
+            <svg id="interactiveKChart" viewBox="0 0 1120 520" role="img" aria-label="interactive OHLC and broker flow chart"></svg>
+            <div class="chart-tooltip" id="chartTooltip"></div>
+          </div>
+          <div class="point-detail" id="pointDetail">
+            <b>移到 K 線上查看單日資料</b>
+            <span>會同步顯示 OHLC、成交量、主分點買賣、淨買賣與估計均價。</span>
+          </div>
+          <script type="application/json" id="chartData">{_html_json(payload)}</script>
+          <script>
+            document.addEventListener('DOMContentLoaded', () => {{
+              const payload = JSON.parse(document.getElementById('chartData').textContent);
+              const svg = document.getElementById('interactiveKChart');
+              const tooltip = document.getElementById('chartTooltip');
+              const detail = document.getElementById('pointDetail');
+              const showBrokerBars = document.getElementById('showBrokerBars');
+              const brokerByDate = new Map(payload.brokerDaily.map(row => [row.date, row]));
+              const ohlc = payload.ohlc.map(row => ({{ ...row, broker: brokerByDate.get(row.date) || null }}));
+              let currentRange = 'all';
+              let selectedDate = '';
+
+              const fmt = (value, digits = 2) => {{
+                const number = Number(value);
+                return Number.isFinite(number) ? number.toLocaleString('en-US', {{ maximumFractionDigits: digits, minimumFractionDigits: digits }}) : 'n/a';
+              }};
+              const fmtInt = value => {{
+                const number = Number(value);
+                return Number.isFinite(number) ? Math.round(number).toLocaleString('en-US') : 'n/a';
+              }};
+              const svgEl = (name, attrs = {{}}, text = '') => {{
+                const node = document.createElementNS('http://www.w3.org/2000/svg', name);
+                Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, String(value)));
+                if (text) node.textContent = text;
+                return node;
+              }};
+              const setDetail = row => {{
+                const broker = row.broker || {{}};
+                detail.innerHTML = `
+                  <b>${{row.date}}</b>
+                  <span>O ${{fmt(row.open)}} / H ${{fmt(row.high)}} / L ${{fmt(row.low)}} / C ${{fmt(row.close)}} · volume ${{fmtInt(row.volume)}}</span>
+                  <span>主分點 ${{payload.brokerName}} 買 ${{fmtInt(broker.target_buy || 0)}} / 賣 ${{fmtInt(broker.target_sell || 0)}} / 淨 ${{fmtInt(broker.target_net || 0)}} · 均價 ${{fmt(broker.target_avg_buy_price)}}</span>
+                  <span>全分點淨買 ${{fmtInt(broker.market_net || 0)}} · ${{row.in_episode ? 'episode 內' : 'episode 外'}}</span>
+                `;
+                document.querySelectorAll('tr[data-date]').forEach(tr => tr.classList.toggle('selected-row', tr.dataset.date === row.date));
+              }};
+              const visibleRows = () => {{
+                if (currentRange === 'all') return ohlc;
+                if (currentRange === 'episode') {{
+                  const indexes = ohlc.map((row, idx) => row.in_episode ? idx : -1).filter(idx => idx >= 0);
+                  if (!indexes.length) return ohlc;
+                  const start = Math.max(Math.min(...indexes) - 20, 0);
+                  const end = Math.min(Math.max(...indexes) + 11, ohlc.length);
+                  return ohlc.slice(start, end);
+                }}
+                return ohlc.slice(Math.max(ohlc.length - Number(currentRange), 0));
+              }};
+              const render = () => {{
+                const rows = visibleRows();
+                svg.replaceChildren();
+                if (!rows.length) return;
+                const width = 1120, height = 520;
+                const left = 58, right = 18, top = 20, priceBottom = 292, volumeTop = 322, volumeBottom = 390, brokerTop = 420, brokerBottom = 492;
+                const chartW = width - left - right;
+                const step = chartW / rows.length;
+                const candleW = Math.max(2, Math.min(9, step * 0.58));
+                const priceValues = rows.flatMap(row => [row.open, row.high, row.low, row.close, row.ma5, row.ma20, row.ma60].map(Number)).filter(Number.isFinite);
+                let low = Math.min(...priceValues), high = Math.max(...priceValues);
+                const pad = Math.max((high - low) * 0.08, 0.01);
+                low -= pad; high += pad;
+                const maxVolume = Math.max(...rows.map(row => Number(row.volume) || 0), 1);
+                const maxAbsBroker = Math.max(...rows.map(row => Math.abs(Number(row.broker?.target_net) || 0)), 1);
+                const yPrice = value => top + (high - Number(value)) / (high - low) * (priceBottom - top);
+                const yVolume = value => volumeBottom - (Number(value) || 0) / maxVolume * (volumeBottom - volumeTop);
+                const yBroker = value => {{
+                  const mid = (brokerTop + brokerBottom) / 2;
+                  return mid - (Number(value) || 0) / maxAbsBroker * ((brokerBottom - brokerTop) / 2);
+                }};
+                const xPos = idx => left + idx * step + step / 2;
+
+                svg.appendChild(svgEl('rect', {{ x: 0, y: 0, width, height, class: 'chart-bg' }}));
+                [0, .25, .5, .75, 1].forEach(ratio => {{
+                  const y = top + ratio * (priceBottom - top);
+                  const price = high - ratio * (high - low);
+                  svg.appendChild(svgEl('line', {{ x1: left, y1: y.toFixed(1), x2: width - right, y2: y.toFixed(1), class: 'grid-line' }}));
+                  svg.appendChild(svgEl('text', {{ x: 8, y: (y + 4).toFixed(1), class: 'axis-label' }}, price.toFixed(2)));
+                }});
+                const episodeIndexes = rows.map((row, idx) => row.in_episode ? idx : -1).filter(idx => idx >= 0);
+                if (episodeIndexes.length) {{
+                  const x = left + Math.min(...episodeIndexes) * step;
+                  const w = (Math.max(...episodeIndexes) - Math.min(...episodeIndexes) + 1) * step;
+                  svg.appendChild(svgEl('rect', {{ x: x.toFixed(1), y: top, width: Math.max(w, step).toFixed(1), height: priceBottom - top, class: 'episode-band' }}));
+                }}
+                svg.appendChild(svgEl('line', {{ x1: left, y1: volumeTop, x2: width - right, y2: volumeTop, class: 'volume-line' }}));
+                svg.appendChild(svgEl('line', {{ x1: left, y1: (brokerTop + brokerBottom) / 2, x2: width - right, y2: (brokerTop + brokerBottom) / 2, class: 'broker-zero' }}));
+
+                const drawPolyline = (field, klass) => {{
+                  const points = rows.map((row, idx) => Number.isFinite(Number(row[field])) ? `${{xPos(idx).toFixed(1)}},${{yPrice(row[field]).toFixed(1)}}` : '').filter(Boolean).join(' ');
+                  if (points) svg.appendChild(svgEl('polyline', {{ points, class: `ma ${{klass}}` }}));
+                }};
+
+                rows.forEach((row, idx) => {{
+                  const x = xPos(idx);
+                  const up = Number(row.close) >= Number(row.open);
+                  const klass = up ? 'up' : 'down';
+                  const volY = yVolume(row.volume);
+                  svg.appendChild(svgEl('rect', {{ x: (x - candleW / 2).toFixed(1), y: volY.toFixed(1), width: candleW.toFixed(1), height: (volumeBottom - volY).toFixed(1), class: `volume ${{klass}}` }}));
+                  if (showBrokerBars.checked && row.broker) {{
+                    const net = Number(row.broker.target_net) || 0;
+                    const mid = (brokerTop + brokerBottom) / 2;
+                    const y = yBroker(net);
+                    svg.appendChild(svgEl('rect', {{
+                      x: (x - candleW / 2).toFixed(1),
+                      y: Math.min(y, mid).toFixed(1),
+                      width: candleW.toFixed(1),
+                      height: Math.max(Math.abs(mid - y), 1).toFixed(1),
+                      class: `broker-bar ${{net >= 0 ? 'buy' : 'sell'}}`
+                    }}));
+                    if (Number(row.broker.target_avg_buy_price) > 0) {{
+                      svg.appendChild(svgEl('circle', {{ cx: x.toFixed(1), cy: yPrice(row.broker.target_avg_buy_price).toFixed(1), r: 2.6, class: 'avg-dot' }}));
+                    }}
+                  }}
+                  const highY = yPrice(row.high), lowY = yPrice(row.low), openY = yPrice(row.open), closeY = yPrice(row.close);
+                  svg.appendChild(svgEl('line', {{ x1: x.toFixed(1), y1: highY.toFixed(1), x2: x.toFixed(1), y2: lowY.toFixed(1), class: `wick ${{klass}}` }}));
+                  svg.appendChild(svgEl('rect', {{
+                    x: (x - candleW / 2).toFixed(1),
+                    y: Math.min(openY, closeY).toFixed(1),
+                    width: candleW.toFixed(1),
+                    height: Math.max(Math.abs(closeY - openY), 1.2).toFixed(1),
+                    class: `candle ${{klass}}`
+                  }}));
+                  const hit = svgEl('rect', {{ x: (left + idx * step).toFixed(1), y: top, width: Math.max(step, 2).toFixed(1), height: brokerBottom - top, class: 'hit-zone', 'data-date': row.date }});
+                  hit.addEventListener('mouseenter', event => {{
+                    tooltip.style.display = 'block';
+                    tooltip.innerHTML = `<b>${{row.date}}</b><br>C ${{fmt(row.close)}} · 主分點淨 ${{fmtInt(row.broker?.target_net || 0)}}`;
+                    setDetail(row);
+                  }});
+                  hit.addEventListener('mousemove', event => {{
+                    const bounds = svg.getBoundingClientRect();
+                    tooltip.style.left = `${{event.clientX - bounds.left + 14}}px`;
+                    tooltip.style.top = `${{event.clientY - bounds.top + 12}}px`;
+                  }});
+                  hit.addEventListener('mouseleave', () => tooltip.style.display = 'none');
+                  hit.addEventListener('click', () => {{
+                    selectedDate = row.date;
+                    setDetail(row);
+                    render();
+                  }});
+                  svg.appendChild(hit);
+                  if (row.date === selectedDate) {{
+                    svg.appendChild(svgEl('line', {{ x1: x.toFixed(1), y1: top, x2: x.toFixed(1), y2: brokerBottom, class: 'selected-date-line' }}));
+                  }}
+                }});
+                drawPolyline('ma5', 'ma5');
+                drawPolyline('ma20', 'ma20');
+                drawPolyline('ma60', 'ma60');
+                svg.appendChild(svgEl('text', {{ x: left, y: 512, class: 'axis-label' }}, rows[0].date));
+                svg.appendChild(svgEl('text', {{ x: width - right - 82, y: 512, class: 'axis-label' }}, rows[rows.length - 1].date));
+              }};
+              document.querySelectorAll('.range-btn').forEach(button => {{
+                button.addEventListener('click', () => {{
+                  document.querySelectorAll('.range-btn').forEach(item => item.classList.remove('active'));
+                  button.classList.add('active');
+                  currentRange = button.dataset.range;
+                  render();
+                }});
+              }});
+              showBrokerBars.addEventListener('change', render);
+              document.querySelectorAll('tr[data-date]').forEach(row => {{
+                row.addEventListener('mouseenter', () => {{
+                  const item = ohlc.find(point => point.date === row.dataset.date);
+                  if (item) setDetail(item);
+                }});
+              }});
+              render();
+            }});
+          </script>
+"""
+
+
 def _case_detail_html(case: dict[str, object]) -> str:
     trend = case["trend"]
     broker_stats = case["broker_stats"]
-    chart = _candlestick_svg(case.get("ohlc_chart", []))
+    chart = _interactive_chart_html(case)
     news_items = case.get("news_items") or []
     news_html = "\n".join(
         f"<li><a href=\"{_escape(item.get('url', ''))}\">{_escape(item.get('title', ''))}</a>"
@@ -741,7 +942,7 @@ def _case_detail_html(case: dict[str, object]) -> str:
         for broker in broker_stats["top_brokers"]
     ) or "<tr><td colspan=\"4\">n/a</td></tr>"
     broker_daily = "\n".join(
-        "<tr>"
+        f"<tr data-date=\"{_escape(row['date'])}\">"
         f"<td>{_escape(row['date'])}</td>"
         f"<td class=\"num\">{_fmt_int(row['target_buy'])}</td>"
         f"<td class=\"num\">{_fmt_int(row['target_sell'])}</td>"
@@ -752,7 +953,7 @@ def _case_detail_html(case: dict[str, object]) -> str:
         for row in case.get("broker_daily", [])
     ) or "<tr><td colspan=\"6\">n/a</td></tr>"
     ohlc_rows = "\n".join(
-        "<tr>"
+        f"<tr data-date=\"{_escape(row['date'])}\">"
         f"<td>{_escape(row['date'])}</td>"
         f"<td>{'yes' if row.get('in_episode') else ''}</td>"
         f"<td class=\"num\">{_fmt_float(row['open'])}</td>"
@@ -792,6 +993,16 @@ def _case_detail_html(case: dict[str, object]) -> str:
     .metric span {{ display: block; font-size: 12px; color: #637083; margin-top: 4px; }}
     .decision {{ display: inline-flex; align-items: center; padding: 5px 9px; border-radius: 999px; background: #e8f3ff; color: #064f8f; font-weight: 700; }}
     .chart-wrap {{ overflow-x: auto; }}
+    .chart-toolbar {{ display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }}
+    .chart-toolbar button {{ border: 1px solid #cfd8e6; background: #fbfcfe; color: #172033; border-radius: 6px; padding: 7px 10px; cursor: pointer; }}
+    .chart-toolbar button.active {{ background: #172033; color: white; border-color: #172033; }}
+    .toggle {{ display: inline-flex; align-items: center; gap: 6px; color: #526173; font-size: 13px; }}
+    .interactive-chart {{ position: relative; overflow-x: auto; border: 1px solid #e5eaf1; background: #fbfcfe; }}
+    .interactive-chart svg {{ min-width: 900px; width: 100%; height: auto; display: block; }}
+    .chart-tooltip {{ display: none; position: absolute; pointer-events: none; z-index: 3; background: rgba(17, 24, 39, .92); color: white; border-radius: 6px; padding: 7px 9px; font-size: 12px; line-height: 1.45; box-shadow: 0 8px 20px rgba(15, 23, 42, .22); }}
+    .point-detail {{ margin-top: 10px; border: 1px solid #dfe5ee; border-radius: 8px; background: #fbfcfe; padding: 11px 12px; display: grid; gap: 4px; color: #334155; }}
+    .point-detail b {{ color: #172033; }}
+    .point-detail span {{ font-size: 13px; }}
     .kchart {{ min-width: 900px; width: 100%; height: auto; display: block; }}
     .chart-bg {{ fill: #fbfcfe; }}
     .grid-line {{ stroke: #e3e8ef; stroke-width: 1; }}
@@ -801,6 +1012,12 @@ def _case_detail_html(case: dict[str, object]) -> str:
     .wick.down, .candle.down {{ stroke: #047857; fill: #10b981; }}
     .volume.up {{ fill: #fecaca; }}
     .volume.down {{ fill: #bbf7d0; }}
+    .broker-zero {{ stroke: #94a3b8; stroke-width: 1; stroke-dasharray: 3 4; }}
+    .broker-bar.buy {{ fill: #dc2626; opacity: .72; }}
+    .broker-bar.sell {{ fill: #059669; opacity: .72; }}
+    .avg-dot {{ fill: #111827; stroke: #fbbf24; stroke-width: 1.5; }}
+    .hit-zone {{ fill: transparent; cursor: crosshair; }}
+    .selected-date-line {{ stroke: #0f172a; stroke-width: 1.3; stroke-dasharray: 4 4; pointer-events: none; }}
     .ma {{ fill: none; stroke-width: 1.8; opacity: 0.95; }}
     .ma5 {{ stroke: #2563eb; }}
     .ma20 {{ stroke: #7c3aed; }}
@@ -812,6 +1029,7 @@ def _case_detail_html(case: dict[str, object]) -> str:
     table {{ width: 100%; border-collapse: collapse; background: white; }}
     th, td {{ padding: 8px 10px; border-bottom: 1px solid #edf1f6; font-size: 13px; text-align: left; white-space: nowrap; }}
     th {{ position: sticky; top: 0; background: #eef2f7; z-index: 1; }}
+    tr.selected-row td {{ background: #fff7d6; }}
     .num {{ text-align: right; font-variant-numeric: tabular-nums; }}
     .pos {{ color: #b42318; }}
     .neg {{ color: #047857; }}
