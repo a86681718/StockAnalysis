@@ -210,6 +210,46 @@ def _broker_daily_rows(raw: pd.DataFrame, target_broker: str) -> list[dict[str, 
     return rows
 
 
+def _broker_daily_by_broker(raw: pd.DataFrame, brokers: list[str]) -> dict[str, list[dict[str, object]]]:
+    if raw.empty or not brokers:
+        return {broker: [] for broker in brokers}
+    work = raw.copy()
+    work["date"] = pd.to_datetime(work["date"], errors="coerce").dt.normalize()
+    work["net_buy"] = work["buy_volume"] - work["sell_volume"]
+    total = work.groupby("date", as_index=False).agg(
+        market_buy=("buy_volume", "sum"),
+        market_sell=("sell_volume", "sum"),
+        market_net=("net_buy", "sum"),
+    )
+    target = work[work["broker"].isin(brokers)].groupby(["broker", "date"], as_index=False).agg(
+        target_buy=("buy_volume", "sum"),
+        target_sell=("sell_volume", "sum"),
+        target_net=("net_buy", "sum"),
+        target_buy_amount=("buy_amount", "sum"),
+    )
+    out: dict[str, list[dict[str, object]]] = {}
+    for broker in brokers:
+        broker_target = target[target["broker"] == broker].drop(columns=["broker"], errors="ignore")
+        daily = total.merge(broker_target, on="date", how="left").fillna(0).sort_values("date")
+        rows: list[dict[str, object]] = []
+        for row in daily.itertuples(index=False):
+            avg_price = row.target_buy_amount / row.target_buy if row.target_buy > 0 else np.nan
+            rows.append(
+                {
+                    "date": _date(row.date),
+                    "target_buy": float(row.target_buy),
+                    "target_sell": float(row.target_sell),
+                    "target_net": float(row.target_net),
+                    "target_avg_buy_price": float(avg_price) if not pd.isna(avg_price) else None,
+                    "market_buy": float(row.market_buy),
+                    "market_sell": float(row.market_sell),
+                    "market_net": float(row.market_net),
+                }
+            )
+        out[broker] = rows
+    return out
+
+
 def _broker_window_stats(
     raw: pd.DataFrame,
     broker_lookup: dict[str, str],
@@ -433,7 +473,7 @@ def _json_default(value: object) -> object:
 
 
 def _slim_cases(cases: list[dict[str, object]]) -> list[dict[str, object]]:
-    heavy_keys = {"ohlc_chart", "broker_daily"}
+    heavy_keys = {"ohlc_chart", "broker_daily", "broker_daily_by_broker"}
     return [{key: value for key, value in case.items() if key not in heavy_keys} for case in cases]
 
 
@@ -530,8 +570,12 @@ def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[st
         raw = pd.concat([frame for frame in frames if not frame.empty], ignore_index=True) if frames else pd.DataFrame()
         trend = _trend_snapshot(ohlc, symbol, end)
         chart_rows = _ohlc_chart_rows(ohlc, symbol, start, end)
-        broker_daily = _broker_daily_rows(raw, str(row.broker))
         broker_stats = _broker_window_stats(raw, broker_lookup, broker_cities, str(row.broker))
+        top_broker_codes = [str(item["broker"]) for item in broker_stats["top_brokers"]]
+        if str(row.broker) not in top_broker_codes:
+            top_broker_codes.insert(0, str(row.broker))
+        broker_daily_by_broker = _broker_daily_by_broker(raw, top_broker_codes)
+        broker_daily = broker_daily_by_broker.get(str(row.broker), [])
         name = stock_names.get(symbol, "")
         general_hit = symbol in general_hits
         news_items = _news_items_for_case(symbol, name, cfg, news_cache)
@@ -568,6 +612,7 @@ def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[st
             "trend": trend,
             "ohlc_chart": chart_rows,
             "broker_daily": broker_daily,
+            "broker_daily_by_broker": broker_daily_by_broker,
             "broker_stats": broker_stats,
             "general_flow_hit": general_hit,
             "score": round(score, 2),
@@ -726,6 +771,8 @@ def _interactive_chart_html(case: dict[str, object]) -> str:
     payload = {
         "ohlc": case.get("ohlc_chart", []),
         "brokerDaily": case.get("broker_daily", []),
+        "brokerDailyByBroker": case.get("broker_daily_by_broker", {}),
+        "topBrokers": case.get("broker_stats", {}).get("top_brokers", []),
         "episodeStart": case["episode_start"],
         "episodeEnd": case["last_qualifying_date"],
         "brokerName": case["broker_name"],
@@ -738,6 +785,7 @@ def _interactive_chart_html(case: dict[str, object]) -> str:
             <button type="button" class="range-btn" data-range="120">近 120 根</button>
             <button type="button" class="range-btn" data-range="60">近 60 根</button>
             <label class="toggle"><input type="checkbox" id="showBrokerBars" checked> 關鍵分點買賣</label>
+            <span class="selected-broker-label" id="selectedBrokerLabel"></span>
           </div>
           <div class="interactive-chart" id="interactiveChart">
             <svg id="interactiveKChart" viewBox="0 0 1120 520" role="img" aria-label="interactive OHLC and broker flow chart"></svg>
@@ -755,11 +803,23 @@ def _interactive_chart_html(case: dict[str, object]) -> str:
               const tooltip = document.getElementById('chartTooltip');
               const detail = document.getElementById('pointDetail');
               const showBrokerBars = document.getElementById('showBrokerBars');
-              const brokerByDate = new Map(payload.brokerDaily.map(row => [row.date, row]));
-              const ohlc = payload.ohlc.map(row => ({{ ...row, broker: brokerByDate.get(row.date) || null }}));
+              const selectedBrokerLabel = document.getElementById('selectedBrokerLabel');
+              const brokerDailyBody = document.getElementById('brokerDailyBody');
+              let selectedBroker = payload.broker;
+              let selectedBrokerName = payload.brokerName;
               let currentRange = 'all';
               let selectedDate = '';
 
+              const brokerRows = broker => payload.brokerDailyByBroker?.[broker] || (broker === payload.broker ? payload.brokerDaily : []);
+              const brokerByDate = () => new Map(brokerRows(selectedBroker).map(row => [row.date, row]));
+              const ohlcRows = () => {{
+                const byDate = brokerByDate();
+                return payload.ohlc.map(row => ({{ ...row, broker: byDate.get(row.date) || null }}));
+              }};
+              const brokerLabel = broker => {{
+                const match = (payload.topBrokers || []).find(item => item.broker === broker);
+                return match?.broker_name || selectedBrokerName || broker;
+              }};
               const fmt = (value, digits = 2) => {{
                 const number = Number(value);
                 return Number.isFinite(number) ? number.toLocaleString('en-US', {{ maximumFractionDigits: digits, minimumFractionDigits: digits }}) : 'n/a';
@@ -779,12 +839,13 @@ def _interactive_chart_html(case: dict[str, object]) -> str:
                 detail.innerHTML = `
                   <b>${{row.date}}</b>
                   <span>O ${{fmt(row.open)}} / H ${{fmt(row.high)}} / L ${{fmt(row.low)}} / C ${{fmt(row.close)}} · volume ${{fmtInt(row.volume)}}</span>
-                  <span>主分點 ${{payload.brokerName}} 買 ${{fmtInt(broker.target_buy || 0)}} / 賣 ${{fmtInt(broker.target_sell || 0)}} / 淨 ${{fmtInt(broker.target_net || 0)}} · 均價 ${{fmt(broker.target_avg_buy_price)}}</span>
+                  <span>選取分點 ${{selectedBrokerName}} 買 ${{fmtInt(broker.target_buy || 0)}} / 賣 ${{fmtInt(broker.target_sell || 0)}} / 淨 ${{fmtInt(broker.target_net || 0)}} · 均價 ${{fmt(broker.target_avg_buy_price)}}</span>
                   <span>全分點淨買 ${{fmtInt(broker.market_net || 0)}} · ${{row.in_episode ? 'episode 內' : 'episode 外'}}</span>
                 `;
                 document.querySelectorAll('tr[data-date]').forEach(tr => tr.classList.toggle('selected-row', tr.dataset.date === row.date));
               }};
               const visibleRows = () => {{
+                const ohlc = ohlcRows();
                 if (currentRange === 'all') return ohlc;
                 if (currentRange === 'episode') {{
                   const indexes = ohlc.map((row, idx) => row.in_episode ? idx : -1).filter(idx => idx >= 0);
@@ -809,13 +870,12 @@ def _interactive_chart_html(case: dict[str, object]) -> str:
                 const pad = Math.max((high - low) * 0.08, 0.01);
                 low -= pad; high += pad;
                 const maxVolume = Math.max(...rows.map(row => Number(row.volume) || 0), 1);
-                const maxAbsBroker = Math.max(...rows.map(row => Math.abs(Number(row.broker?.target_net) || 0)), 1);
+                const maxAbsBroker = Math.max(...rows.flatMap(row => [Number(row.broker?.target_buy) || 0, Number(row.broker?.target_sell) || 0]), 1);
                 const yPrice = value => top + (high - Number(value)) / (high - low) * (priceBottom - top);
                 const yVolume = value => volumeBottom - (Number(value) || 0) / maxVolume * (volumeBottom - volumeTop);
-                const yBroker = value => {{
-                  const mid = (brokerTop + brokerBottom) / 2;
-                  return mid - (Number(value) || 0) / maxAbsBroker * ((brokerBottom - brokerTop) / 2);
-                }};
+                const brokerMid = (brokerTop + brokerBottom) / 2;
+                const yBrokerBuy = value => brokerMid - (Number(value) || 0) / maxAbsBroker * ((brokerBottom - brokerTop) / 2);
+                const yBrokerSell = value => brokerMid + (Number(value) || 0) / maxAbsBroker * ((brokerBottom - brokerTop) / 2);
                 const xPos = idx => left + idx * step + step / 2;
 
                 svg.appendChild(svgEl('rect', {{ x: 0, y: 0, width, height, class: 'chart-bg' }}));
@@ -832,7 +892,8 @@ def _interactive_chart_html(case: dict[str, object]) -> str:
                   svg.appendChild(svgEl('rect', {{ x: x.toFixed(1), y: top, width: Math.max(w, step).toFixed(1), height: priceBottom - top, class: 'episode-band' }}));
                 }}
                 svg.appendChild(svgEl('line', {{ x1: left, y1: volumeTop, x2: width - right, y2: volumeTop, class: 'volume-line' }}));
-                svg.appendChild(svgEl('line', {{ x1: left, y1: (brokerTop + brokerBottom) / 2, x2: width - right, y2: (brokerTop + brokerBottom) / 2, class: 'broker-zero' }}));
+                svg.appendChild(svgEl('line', {{ x1: left, y1: brokerMid, x2: width - right, y2: brokerMid, class: 'broker-zero' }}));
+                svg.appendChild(svgEl('text', {{ x: left, y: (brokerTop - 7).toFixed(1), class: 'axis-label' }}, `${{selectedBrokerName}} 買/賣`));
 
                 const drawPolyline = (field, klass) => {{
                   const points = rows.map((row, idx) => Number.isFinite(Number(row[field])) ? `${{xPos(idx).toFixed(1)}},${{yPrice(row[field]).toFixed(1)}}` : '').filter(Boolean).join(' ');
@@ -846,16 +907,28 @@ def _interactive_chart_html(case: dict[str, object]) -> str:
                   const volY = yVolume(row.volume);
                   svg.appendChild(svgEl('rect', {{ x: (x - candleW / 2).toFixed(1), y: volY.toFixed(1), width: candleW.toFixed(1), height: (volumeBottom - volY).toFixed(1), class: `volume ${{klass}}` }}));
                   if (showBrokerBars.checked && row.broker) {{
-                    const net = Number(row.broker.target_net) || 0;
-                    const mid = (brokerTop + brokerBottom) / 2;
-                    const y = yBroker(net);
-                    svg.appendChild(svgEl('rect', {{
-                      x: (x - candleW / 2).toFixed(1),
-                      y: Math.min(y, mid).toFixed(1),
-                      width: candleW.toFixed(1),
-                      height: Math.max(Math.abs(mid - y), 1).toFixed(1),
-                      class: `broker-bar ${{net >= 0 ? 'buy' : 'sell'}}`
-                    }}));
+                    const buy = Number(row.broker.target_buy) || 0;
+                    const sell = Number(row.broker.target_sell) || 0;
+                    if (buy > 0) {{
+                      const y = yBrokerBuy(buy);
+                      svg.appendChild(svgEl('rect', {{
+                        x: (x - candleW / 2).toFixed(1),
+                        y: y.toFixed(1),
+                        width: candleW.toFixed(1),
+                        height: Math.max(brokerMid - y, 1).toFixed(1),
+                        class: 'broker-bar buy'
+                      }}));
+                    }}
+                    if (sell > 0) {{
+                      const y = yBrokerSell(sell);
+                      svg.appendChild(svgEl('rect', {{
+                        x: (x - candleW / 2).toFixed(1),
+                        y: brokerMid.toFixed(1),
+                        width: candleW.toFixed(1),
+                        height: Math.max(y - brokerMid, 1).toFixed(1),
+                        class: 'broker-bar sell'
+                      }}));
+                    }}
                     if (Number(row.broker.target_avg_buy_price) > 0) {{
                       svg.appendChild(svgEl('circle', {{ cx: x.toFixed(1), cy: yPrice(row.broker.target_avg_buy_price).toFixed(1), r: 2.6, class: 'avg-dot' }}));
                     }}
@@ -872,7 +945,7 @@ def _interactive_chart_html(case: dict[str, object]) -> str:
                   const hit = svgEl('rect', {{ x: (left + idx * step).toFixed(1), y: top, width: Math.max(step, 2).toFixed(1), height: brokerBottom - top, class: 'hit-zone', 'data-date': row.date }});
                   hit.addEventListener('mouseenter', event => {{
                     tooltip.style.display = 'block';
-                    tooltip.innerHTML = `<b>${{row.date}}</b><br>C ${{fmt(row.close)}} · 主分點淨 ${{fmtInt(row.broker?.target_net || 0)}}`;
+                    tooltip.innerHTML = `<b>${{row.date}}</b><br>C ${{fmt(row.close)}} · ${{selectedBrokerName}} 買 ${{fmtInt(row.broker?.target_buy || 0)}} / 賣 ${{fmtInt(row.broker?.target_sell || 0)}} / 淨 ${{fmtInt(row.broker?.target_net || 0)}}`;
                     setDetail(row);
                   }});
                   hit.addEventListener('mousemove', event => {{
@@ -897,6 +970,46 @@ def _interactive_chart_html(case: dict[str, object]) -> str:
                 svg.appendChild(svgEl('text', {{ x: left, y: 512, class: 'axis-label' }}, rows[0].date));
                 svg.appendChild(svgEl('text', {{ x: width - right - 82, y: 512, class: 'axis-label' }}, rows[rows.length - 1].date));
               }};
+              const renderBrokerDailyTable = () => {{
+                if (!brokerDailyBody) return;
+                const rows = brokerRows(selectedBroker);
+                if (!rows.length) {{
+                  brokerDailyBody.innerHTML = '<tr><td colspan="6">n/a</td></tr>';
+                  return;
+                }}
+                brokerDailyBody.innerHTML = rows.map(row => `
+                  <tr data-date="${{row.date}}">
+                    <td>${{row.date}}</td>
+                    <td class="num">${{fmtInt(row.target_buy)}}</td>
+                    <td class="num">${{fmtInt(row.target_sell)}}</td>
+                    <td class="num ${{Number(row.target_net) >= 0 ? 'pos' : 'neg'}}">${{fmtInt(row.target_net)}}</td>
+                    <td class="num">${{fmt(row.target_avg_buy_price)}}</td>
+                    <td class="num ${{Number(row.market_net) >= 0 ? 'pos' : 'neg'}}">${{fmtInt(row.market_net)}}</td>
+                  </tr>
+                `).join('');
+                bindDateRows();
+              }};
+              const bindDateRows = () => {{
+                const rowsForBind = ohlcRows();
+                document.querySelectorAll('tr[data-date]').forEach(row => {{
+                  row.addEventListener('mouseenter', () => {{
+                    const item = rowsForBind.find(point => point.date === row.dataset.date);
+                    if (item) setDetail(item);
+                  }});
+                }});
+              }};
+              const selectBroker = (broker, name) => {{
+                selectedBroker = broker;
+                selectedBrokerName = name || brokerLabel(broker);
+                selectedBrokerLabel.textContent = `選取分點：${{selectedBrokerName}} (${{selectedBroker}})`;
+                document.querySelectorAll('tr[data-broker]').forEach(row => row.classList.toggle('selected-broker-row', row.dataset.broker === selectedBroker));
+                const initialRows = visibleRows();
+                const initialRow = initialRows.find(row => row.in_episode) || initialRows[initialRows.length - 1];
+                selectedDate = initialRow?.date || '';
+                renderBrokerDailyTable();
+                render();
+                if (initialRow) setDetail(initialRow);
+              }};
               document.querySelectorAll('.range-btn').forEach(button => {{
                 button.addEventListener('click', () => {{
                   document.querySelectorAll('.range-btn').forEach(item => item.classList.remove('active'));
@@ -906,13 +1019,12 @@ def _interactive_chart_html(case: dict[str, object]) -> str:
                 }});
               }});
               showBrokerBars.addEventListener('change', render);
-              document.querySelectorAll('tr[data-date]').forEach(row => {{
-                row.addEventListener('mouseenter', () => {{
-                  const item = ohlc.find(point => point.date === row.dataset.date);
-                  if (item) setDetail(item);
+              document.querySelectorAll('tr[data-broker]').forEach(row => {{
+                row.addEventListener('click', () => {{
+                  selectBroker(row.dataset.broker, row.dataset.brokerName);
                 }});
               }});
-              render();
+              selectBroker(payload.broker, payload.brokerName);
             }});
           </script>
 """
@@ -933,7 +1045,7 @@ def _case_detail_html(case: dict[str, object]) -> str:
         for link in case.get("news_links", [])
     )
     top_brokers = "\n".join(
-        "<tr>"
+        f"<tr data-broker=\"{_escape(broker['broker'])}\" data-broker-name=\"{_escape(broker['broker_name'])}\">"
         f"<td>{_escape(broker['broker_name'])}</td>"
         f"<td>{_escape(broker.get('broker_city') or 'n/a')}</td>"
         f"<td class=\"num\">{_fmt_int(broker['net_buy'])}</td>"
@@ -997,6 +1109,7 @@ def _case_detail_html(case: dict[str, object]) -> str:
     .chart-toolbar button {{ border: 1px solid #cfd8e6; background: #fbfcfe; color: #172033; border-radius: 6px; padding: 7px 10px; cursor: pointer; }}
     .chart-toolbar button.active {{ background: #172033; color: white; border-color: #172033; }}
     .toggle {{ display: inline-flex; align-items: center; gap: 6px; color: #526173; font-size: 13px; }}
+    .selected-broker-label {{ color: #334155; font-size: 13px; font-weight: 700; }}
     .interactive-chart {{ position: relative; overflow-x: auto; border: 1px solid #e5eaf1; background: #fbfcfe; }}
     .interactive-chart svg {{ min-width: 900px; width: 100%; height: auto; display: block; }}
     .chart-tooltip {{ display: none; position: absolute; pointer-events: none; z-index: 3; background: rgba(17, 24, 39, .92); color: white; border-radius: 6px; padding: 7px 9px; font-size: 12px; line-height: 1.45; box-shadow: 0 8px 20px rgba(15, 23, 42, .22); }}
@@ -1030,6 +1143,9 @@ def _case_detail_html(case: dict[str, object]) -> str:
     th, td {{ padding: 8px 10px; border-bottom: 1px solid #edf1f6; font-size: 13px; text-align: left; white-space: nowrap; }}
     th {{ position: sticky; top: 0; background: #eef2f7; z-index: 1; }}
     tr.selected-row td {{ background: #fff7d6; }}
+    tr[data-broker] {{ cursor: pointer; }}
+    tr[data-broker]:hover td {{ background: #f8fafc; }}
+    tr.selected-broker-row td {{ background: #e8f3ff; font-weight: 700; }}
     .num {{ text-align: right; font-variant-numeric: tabular-nums; }}
     .pos {{ color: #b42318; }}
     .neg {{ color: #047857; }}
@@ -1077,15 +1193,17 @@ def _case_detail_html(case: dict[str, object]) -> str:
             <span><i style="background:#2563eb"></i>MA5</span>
             <span><i style="background:#7c3aed"></i>MA20</span>
             <span><i style="background:#f59e0b"></i>MA60</span>
+            <span><i style="background:#dc2626"></i>選取分點買進</span>
+            <span><i style="background:#059669"></i>選取分點賣出</span>
             <span>黃色底色為 episode 對應時間</span>
           </div>
         </section>
         <section>
-          <h2>主分點逐日買賣超</h2>
+          <h2>選取分點逐日買賣超</h2>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Date</th><th>主分點買</th><th>主分點賣</th><th>主分點淨買</th><th>估計買均價</th><th>全分點淨買</th></tr></thead>
-              <tbody>{broker_daily}</tbody>
+              <thead><tr><th>Date</th><th>分點買</th><th>分點賣</th><th>分點淨買</th><th>估計買均價</th><th>全分點淨買</th></tr></thead>
+              <tbody id="brokerDailyBody">{broker_daily}</tbody>
             </table>
           </div>
         </section>
