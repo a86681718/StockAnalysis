@@ -30,6 +30,7 @@ class CaseReviewConfig:
     general_cases_path: Path
     ohlc_path: Path
     broker_list_path: Path
+    broker_branch_cases_path: Path | None
     company_profile_paths: tuple[Path, ...]
     broker_dirs: tuple[Path, ...]
     output_dir: Path
@@ -100,6 +101,60 @@ def _load_broker_cities(path: Path) -> dict[str, str]:
     if not code_col or not address_col:
         return {}
     return dict(zip(raw[code_col].astype(str).str.strip(), raw[address_col].map(extract_city)))
+
+
+def _resolve_broker_branch_cases_path(path: Path | None) -> Path | None:
+    if path is None:
+        return None
+    path = Path(path)
+    if path.is_file():
+        return path
+    if path.is_dir():
+        matches = sorted(path.glob("recent_cases_*.csv"))
+        return matches[-1] if matches else None
+    return None
+
+
+def _load_broker_branch_cases(path: Path | None) -> tuple[pd.DataFrame, str]:
+    resolved = _resolve_broker_branch_cases_path(path)
+    if resolved is None or not resolved.exists():
+        return pd.DataFrame(), ""
+    cases = pd.read_csv(resolved, dtype={"symbol": str, "broker": str}, encoding="utf-8-sig").fillna("")
+    if cases.empty:
+        return pd.DataFrame(), str(resolved)
+    cases["symbol"] = cases["symbol"].astype(str).str.strip()
+    cases["broker"] = cases["broker"].astype(str).str.strip()
+    for col in ("case_start", "case_end", "top_date"):
+        if col in cases.columns:
+            cases[col] = pd.to_datetime(cases[col], errors="coerce").dt.normalize()
+    if "max_score" in cases.columns:
+        cases["max_score"] = pd.to_numeric(cases["max_score"], errors="coerce").fillna(0.0)
+    return cases.sort_values(["max_score", "top_date"], ascending=[False, False]).reset_index(drop=True), str(resolved)
+
+
+def _match_broker_branch_case(
+    cases: pd.DataFrame,
+    symbol: str,
+    broker: str,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> dict[str, object] | None:
+    if cases.empty:
+        return None
+    symbol_cases = cases[cases["symbol"] == symbol].copy()
+    if symbol_cases.empty:
+        return None
+    exact = symbol_cases[symbol_cases["broker"] == broker].copy()
+    match_level = "same_broker" if not exact.empty else "same_symbol"
+    candidates = exact if not exact.empty else symbol_cases
+    if "case_start" in candidates.columns and "case_end" in candidates.columns:
+        overlaps = candidates[(candidates["case_start"] <= end) & (candidates["case_end"] >= start)].copy()
+        if not overlaps.empty:
+            candidates = overlaps
+            match_level = f"{match_level}_overlap"
+    row = candidates.sort_values(["max_score", "top_date"], ascending=[False, False]).iloc[0].to_dict()
+    row["match_level"] = match_level
+    return row
 
 
 def _load_ohlc_context(path: Path, symbols: set[str]) -> pd.DataFrame:
@@ -323,7 +378,13 @@ def _broker_window_stats(
     }
 
 
-def _score_case(row: pd.Series, trend: dict[str, object], broker_stats: dict[str, object], general_hit: bool) -> tuple[float, list[str], list[str]]:
+def _score_case(
+    row: pd.Series,
+    trend: dict[str, object],
+    broker_stats: dict[str, object],
+    general_hit: bool,
+    broker_branch_hit: dict[str, object] | None,
+) -> tuple[float, list[str], list[str]]:
     positives: list[str] = []
     risks: list[str] = []
     score = 0.0
@@ -367,6 +428,13 @@ def _score_case(row: pd.Series, trend: dict[str, object], broker_stats: dict[str
     if general_hit:
         score += 0.6
         positives.append("也出現在一般主力流異常清單")
+    if broker_branch_hit:
+        if str(broker_branch_hit.get("match_level", "")).startswith("same_broker"):
+            score += 0.6
+            positives.append("同分點命中最新關鍵分點異常偵測")
+        else:
+            score += 0.3
+            positives.append("同股票命中最新關鍵分點異常偵測")
     avg_price = _num(broker_stats["target_avg_buy_price"], math.nan)
     latest_close = _num(trend["latest_close"], math.nan)
     if not math.isnan(avg_price) and not math.isnan(latest_close):
@@ -447,11 +515,11 @@ def _news_items_for_case(
     cfg: CaseReviewConfig,
     cache: dict[str, list[dict[str, str]]],
 ) -> list[dict[str, str]]:
-    if not cfg.fetch_news:
-        return []
     key = _news_cache_key(symbol, name)
     if key in cache:
         return cache[key]
+    if not cfg.fetch_news:
+        return []
     try:
         items = _fetch_google_news_items(symbol, name, cfg.max_news_items, cfg.news_timeout_seconds)
     except (requests.RequestException, ET.ParseError):
@@ -556,6 +624,7 @@ def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[st
     parquet_index = build_parquet_index(cfg.broker_dirs)
     general = pd.read_parquet(cfg.general_cases_path)
     general_hits = set(general.loc[general["qualifying_dates"] > cfg.min_trigger_days, "symbol"].astype(str))
+    broker_branch_cases, broker_branch_source = _load_broker_branch_cases(cfg.broker_branch_cases_path)
     news_cache_path = cfg.output_dir / "news_cache.json"
     news_cache = _load_news_cache(news_cache_path)
 
@@ -576,11 +645,12 @@ def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[st
             top_broker_codes.insert(0, str(row.broker))
         broker_daily_by_broker = _broker_daily_by_broker(raw, top_broker_codes)
         broker_daily = broker_daily_by_broker.get(str(row.broker), [])
+        broker_branch_hit = _match_broker_branch_case(broker_branch_cases, symbol, str(row.broker), start, end)
         name = stock_names.get(symbol, "")
         general_hit = symbol in general_hits
         news_items = _news_items_for_case(symbol, name, cfg, news_cache)
         row_series = pd.Series(row._asdict())
-        score, positives, risks = _score_case(row_series, trend, broker_stats, general_hit)
+        score, positives, risks = _score_case(row_series, trend, broker_stats, general_hit, broker_branch_hit)
         if not bool(row.ongoing):
             score = min(score, 1.5)
             risks.insert(0, "episode 已結束，僅供回顧，不作為當前買進候選")
@@ -615,6 +685,7 @@ def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[st
             "broker_daily_by_broker": broker_daily_by_broker,
             "broker_stats": broker_stats,
             "general_flow_hit": general_hit,
+            "broker_branch_hit": broker_branch_hit,
             "score": round(score, 2),
             "decision": _risk_label(score),
             "positives": positives,
@@ -640,6 +711,8 @@ def build_cases(cfg: CaseReviewConfig) -> tuple[list[dict[str, object]], dict[st
         "cases_with_news": sum(1 for case in cases if case["news_items"]),
         "news_cache_path": str(news_cache_path) if cfg.fetch_news else "",
         "all_trigger_gt5_cases_path": str(cfg.output_dir / "all_trigger_gt5_cases.csv"),
+        "broker_branch_cases_source": broker_branch_source,
+        "broker_branch_hit_count": sum(1 for case in cases if case.get("broker_branch_hit")),
     }
     return cases, summary, universe
 
@@ -1033,6 +1106,7 @@ def _interactive_chart_html(case: dict[str, object]) -> str:
 def _case_detail_html(case: dict[str, object]) -> str:
     trend = case["trend"]
     broker_stats = case["broker_stats"]
+    broker_branch_hit = case.get("broker_branch_hit") or {}
     chart = _interactive_chart_html(case)
     news_items = case.get("news_items") or []
     news_html = "\n".join(
@@ -1081,6 +1155,29 @@ def _case_detail_html(case: dict[str, object]) -> str:
     ) or "<tr><td colspan=\"10\">n/a</td></tr>"
     positives = "\n".join(f"<li>{_escape(item)}</li>" for item in case["positives"]) or "<li>無明顯正面加分。</li>"
     risks = "\n".join(f"<li>{_escape(item)}</li>" for item in case["risks"]) or "<li>未觸發主要量化風險。</li>"
+    branch_hit_text = "no"
+    branch_hit_sub = "最新關鍵分點偵測未命中"
+    if broker_branch_hit:
+        branch_hit_text = _escape(str(broker_branch_hit.get("top_event_type", "")) or "yes")
+        branch_hit_sub = (
+            f"{_escape(str(broker_branch_hit.get('match_level', '')))} · "
+            f"{_escape(_date(broker_branch_hit.get('top_date')))} · "
+            f"score {_fmt_float(broker_branch_hit.get('max_score'))}"
+        )
+    branch_hit_section = ""
+    if broker_branch_hit:
+        branch_hit_section = f"""
+        <section>
+          <h2>最新關鍵分點偵測命中</h2>
+          <div class="metrics branch-hit-metrics">
+            {_metric("命中層級", str(broker_branch_hit.get("match_level", "")), f"分點 {broker_branch_hit.get('broker_name') or broker_branch_hit.get('broker', '')}")}
+            {_metric("事件型態", str(broker_branch_hit.get("top_event_type", "")), f"top_date {_date(broker_branch_hit.get('top_date'))}")}
+            {_metric("異常分數", _fmt_float(broker_branch_hit.get("max_score")), f"events {broker_branch_hit.get('n_events', '')}")}
+            {_metric("權證數", str(broker_branch_hit.get("warrant_window_count_max", "")), str(broker_branch_hit.get("warrant_window_ids_top", "")))}
+          </div>
+          <p class="note">{_escape(broker_branch_hit.get("explanation_top", ""))}</p>
+        </section>
+        """
     return f"""<!doctype html>
 <html lang="zh-Hant">
 <head>
@@ -1183,6 +1280,7 @@ def _case_detail_html(case: dict[str, object]) -> str:
       {_metric("城市群聚", broker_stats["dominant_city"] or "n/a", _fmt_pct(broker_stats["dominant_city_share"]))}
       {_metric("左手換右手", "yes" if broker_stats["left_right_flag"] else "no", f"cross ratio {_fmt_pct(broker_stats['same_broker_cross_ratio'])}")}
       {_metric("一般主力流交叉", "yes" if case["general_flow_hit"] else "no", f"狀態 {case['status']}")}
+      {_metric("最新關鍵分點偵測", branch_hit_text, branch_hit_sub)}
     </div>
     <div class="layout">
       <div>
@@ -1207,6 +1305,7 @@ def _case_detail_html(case: dict[str, object]) -> str:
             </table>
           </div>
         </section>
+        {branch_hit_section}
         <section>
           <h2>OHLC / MA 明細</h2>
           <div class="table-wrap">
@@ -1271,6 +1370,8 @@ def write_review_report(cases: list[dict[str, object]], summary: dict[str, objec
         f"- Cases with RSS news items: `{summary['cases_with_news']}`",
         f"- News cache: `{summary['news_cache_path'] or 'n/a'}`",
         f"- Full trigger-days index: `{summary['all_trigger_gt5_cases_path']}`",
+        f"- Broker-branch cases source: `{summary.get('broker_branch_cases_source') or 'n/a'}`",
+        f"- Broker-branch hit cases: `{summary.get('broker_branch_hit_count', 0)}`",
         "",
         "## Evaluation Facets",
         "",
@@ -1295,6 +1396,7 @@ def write_review_report(cases: list[dict[str, object]], summary: dict[str, objec
             f"- `{case['rank']}` `{case['symbol']}` `{case['name']}` `{case['broker_name']}` "
             f"score=`{case['score']}` trigger_days=`{case['trigger_days']}` "
             f"trend=`{case['trend']['short_trend']}/{case['trend']['mid_trend']}/{case['trend']['long_trend']}` "
+            f"broker_branch_hit=`{case.get('broker_branch_hit', {}).get('top_event_type', 'no') if case.get('broker_branch_hit') else 'no'}` "
             f"detail=`{case['detail_path']}`"
         )
     (out_dir / "review_report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -1313,14 +1415,24 @@ def _html_page(cases: list[dict[str, object]], summary: dict[str, object]) -> st
         suffix = f"<br><span>{published}</span>" if published else ""
         return f"<a href=\"{url}\">{title}</a>{suffix}"
 
+    def broker_branch_cell(case: dict[str, object]) -> str:
+        hit = case.get("broker_branch_hit") or {}
+        if not hit:
+            return "n/a"
+        event_type = html.escape(str(hit.get("top_event_type", "")))
+        score = _fmt_float(hit.get("max_score"))
+        top_date = html.escape(_date(hit.get("top_date")))
+        level = html.escape(str(hit.get("match_level", "")))
+        return f"{event_type}<br><span>{top_date} score {score} · {level}</span>"
+
     rows = "\n".join(
-        f"<tr data-decision=\"{html.escape(case['decision'])}\" data-scope=\"{html.escape(case['scope_note'])}\">"
+        f"<tr data-decision=\"{html.escape(case['decision'])}\" data-scope=\"{html.escape(case['scope_note'])}\" data-branch-hit=\"{'yes' if case.get('broker_branch_hit') else 'no'}\">"
         f"<td>{case['rank']}</td><td><a href=\"{html.escape(case['detail_path'])}\">{case['symbol']} {html.escape(case['name'])}</a></td>"
         f"<td>{html.escape(case['broker_name'])}</td><td>{html.escape(case['scope_note'])}</td><td>{case['trigger_days']}</td><td>{case['score']}</td>"
         f"<td>{html.escape(case['decision'])}</td><td>{_fmt_pct(case['cumulative_purity'])}</td>"
         f"<td>{_fmt_pct(case['cumulative_buy_share'])}</td><td>{case['trend']['short_trend']} / {case['trend']['mid_trend']} / {case['trend']['long_trend']}</td>"
         f"<td>{html.escape(case['broker_stats']['dominant_city'] or '')} {_fmt_pct(case['broker_stats']['dominant_city_share'])}</td>"
-        f"<td>{'yes' if case['broker_stats']['left_right_flag'] else 'no'}</td><td>{news_cell(case)}</td></tr>"
+        f"<td>{'yes' if case['broker_stats']['left_right_flag'] else 'no'}</td><td>{broker_branch_cell(case)}</td><td>{news_cell(case)}</td></tr>"
         for case in cases
     )
     return f"""<!doctype html>
@@ -1360,6 +1472,7 @@ def _html_page(cases: list[dict[str, object]], summary: dict[str, object]) -> st
       <div class="metric">觸發門檻<b>&gt; {summary.get("min_trigger_days", "")}</b></div>
       <div class="metric">可列入觀察<b>{summary.get("decision_counts", {}).get("可列入買進觀察", 0)}</b></div>
       <div class="metric">有新聞線索<b>{summary.get("cases_with_news", 0)}</b></div>
+      <div class="metric">關鍵分點命中<b>{summary.get("broker_branch_hit_count", 0)}</b></div>
     </section>
     <div class="toolbar">
       <input id="q" placeholder="搜尋股票/分點/城市">
@@ -1376,9 +1489,14 @@ def _html_page(cases: list[dict[str, object]], summary: dict[str, object]) -> st
         <option>ongoing_but_not_review_eligible</option>
         <option>historical_or_ended_episode</option>
       </select>
+      <select id="branchHit">
+        <option value="">全部關鍵分點</option>
+        <option value="yes">命中最新關鍵分點偵測</option>
+        <option value="no">未命中</option>
+      </select>
     </div>
     <table id="cases">
-      <thead><tr><th>Rank</th><th>案例</th><th>主分點</th><th>分類</th><th>觸發</th><th>Score</th><th>結論</th><th>純度</th><th>買量占比</th><th>短/中/長趨勢</th><th>城市群聚</th><th>左手警示</th><th>最近新聞</th></tr></thead>
+      <thead><tr><th>Rank</th><th>案例</th><th>主分點</th><th>分類</th><th>觸發</th><th>Score</th><th>結論</th><th>純度</th><th>買量占比</th><th>短/中/長趨勢</th><th>城市群聚</th><th>左手警示</th><th>最新關鍵分點</th><th>最近新聞</th></tr></thead>
       <tbody>{rows}</tbody>
     </table>
   </main>
@@ -1387,19 +1505,22 @@ def _html_page(cases: list[dict[str, object]], summary: dict[str, object]) -> st
     const q = document.getElementById('q');
     const decision = document.getElementById('decision');
     const scope = document.getElementById('scope');
+    const branchHit = document.getElementById('branchHit');
     const rows = [...document.querySelectorAll('#cases tbody tr')];
     function filter() {{
       const term = q.value.trim().toLowerCase();
       const dec = decision.value;
       const scopeValue = scope.value;
+      const branchValue = branchHit.value;
       rows.forEach(row => {{
         const text = row.textContent.toLowerCase();
-        row.style.display = (!term || text.includes(term)) && (!dec || row.dataset.decision === dec) && (!scopeValue || row.dataset.scope === scopeValue) ? '' : 'none';
+        row.style.display = (!term || text.includes(term)) && (!dec || row.dataset.decision === dec) && (!scopeValue || row.dataset.scope === scopeValue) && (!branchValue || row.dataset.branchHit === branchValue) ? '' : 'none';
       }});
     }}
     q.addEventListener('input', filter);
     decision.addEventListener('change', filter);
     scope.addEventListener('change', filter);
+    branchHit.addEventListener('change', filter);
   </script>
 </body>
 </html>
@@ -1432,6 +1553,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--general-cases", type=Path, default=resolve_output("analysis", "general_broker_flow_anomaly", "general_broker_flow_anomaly_review_cases.parquet"))
     parser.add_argument("--ohlc", type=Path, default=resolve_data("_derived", "ohlc.parquet"))
     parser.add_argument("--broker-list", type=Path, default=resolve_data("broker_list.csv"))
+    parser.add_argument(
+        "--broker-branch-cases",
+        type=Path,
+        default=resolve_output("analysis", "broker_branch_accumulation"),
+        help="Path to a recent_cases_*.csv file or the broker_branch_accumulation output directory.",
+    )
     parser.add_argument("--company-profiles", nargs="+", type=Path, default=[resolve_data("reference", "company_profiles_twse.json"), resolve_data("reference", "company_profiles_tpex.json")])
     parser.add_argument("--broker-dirs", nargs="+", type=Path, default=[resolve_data("bs_report", "parquet_twse"), resolve_data("bs_report", "parquet_tpex")])
     parser.add_argument("--output-dir", type=Path, default=resolve_output("analysis", "trigger_days_gt5_case_review"))
@@ -1452,6 +1579,7 @@ def main() -> None:
         general_cases_path=args.general_cases,
         ohlc_path=args.ohlc,
         broker_list_path=args.broker_list,
+        broker_branch_cases_path=args.broker_branch_cases,
         company_profile_paths=tuple(args.company_profiles),
         broker_dirs=tuple(args.broker_dirs),
         output_dir=args.output_dir,
