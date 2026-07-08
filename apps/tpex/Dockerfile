@@ -15,15 +15,20 @@ RUN apt-get update && apt-get install -y \
     alsa-utils pulseaudio \
     && rm -rf /var/lib/apt/lists/*
 
-# 安裝 Chrome v136
-RUN wget https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/136.0.7103.113/linux64/chrome-linux64.zip && \
-    unzip chrome-linux64.zip && mv chrome-linux64 /opt/chrome && \
-    ln -s /opt/chrome/chrome /usr/bin/google-chrome
-
-# 安裝 ChromeDriver
-RUN wget https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/136.0.7103.113/linux64/chromedriver-linux64.zip && \
-    unzip chromedriver-linux64.zip && mv chromedriver-linux64/chromedriver /usr/bin/chromedriver && \
-    chmod +x /usr/bin/chromedriver
+# 安裝瀏覽器與 driver。Cloud Run/Artifact Registry 使用 amd64 Chrome for Testing；
+# Apple Silicon 本機 build 則使用 Debian Chromium，避免 amd64 Chrome 在 qemu 下崩潰。
+RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+        wget https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/136.0.7103.113/linux64/chrome-linux64.zip && \
+        unzip chrome-linux64.zip && mv chrome-linux64 /opt/chrome && \
+        ln -s /opt/chrome/chrome /usr/bin/google-chrome && \
+        wget https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/136.0.7103.113/linux64/chromedriver-linux64.zip && \
+        unzip chromedriver-linux64.zip && mv chromedriver-linux64/chromedriver /usr/bin/chromedriver && \
+        chmod +x /usr/bin/chromedriver; \
+    else \
+        apt-get update && apt-get install -y chromium chromium-driver && \
+        ln -s /usr/bin/chromium /usr/bin/google-chrome && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
 
 # 安裝 Python 套件
 COPY apps/tpex/requirements.txt /app/

@@ -1,0 +1,10 @@
+.git
+.gcloud
+.venv
+__pycache__
+*.pyc
+
+data
+outputs
+notebooks
+goal
