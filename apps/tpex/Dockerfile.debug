@@ -1,0 +1,40 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app/src
+ENV STOCKANALYSIS_ROOT=/app
+ENV TPEX_DEBUG_OUTPUT_DIR=/tmp/tpex-debug
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    wget curl unzip gnupg ca-certificates \
+    libnss3 libatk-bridge2.0-0 libx11-xcb1 libxcomposite1 \
+    libxdamage1 libxrandr2 libasound2 libxshmfence1 libgtk-3-0 \
+    libgbm1 libdrm2 xvfb x11-xserver-utils mesa-utils \
+    fonts-noto fonts-noto-cjk fonts-liberation fonts-dejavu \
+    alsa-utils pulseaudio \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+        wget https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/136.0.7103.113/linux64/chrome-linux64.zip && \
+        unzip chrome-linux64.zip && mv chrome-linux64 /opt/chrome && \
+        ln -s /opt/chrome/chrome /usr/bin/google-chrome && \
+        wget https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/136.0.7103.113/linux64/chromedriver-linux64.zip && \
+        unzip chromedriver-linux64.zip && mv chromedriver-linux64/chromedriver /usr/bin/chromedriver && \
+        chmod +x /usr/bin/chromedriver; \
+    else \
+        apt-get update && apt-get install -y chromium chromium-driver && \
+        ln -s /usr/bin/chromium /usr/bin/google-chrome && \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
+
+COPY apps/tpex/requirements.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY apps/tpex/debug_tpex_bs_report.py /app/debug_tpex_bs_report.py
+COPY src/ /app/src/
+COPY apps/tpex/entrypoint-debug.sh /app/entrypoint-debug.sh
+RUN chmod +x /app/entrypoint-debug.sh
+
+ENTRYPOINT ["/app/entrypoint-debug.sh"]
