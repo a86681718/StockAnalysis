@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import json
+import base64
 import shutil
 import time
 import logging
@@ -172,6 +173,40 @@ class Turnstile:
         res = self.call_cdp("Runtime.evaluate", expression=expression, returnByValue=True)
         return res.get("result", {}).get("value")
 
+    def capture_turnstile_diagnostics(self, label: str) -> None:
+        """Log the challenge state and upload a screenshot for failed token attempts."""
+        try:
+            details = self.evaluate_js("""
+                JSON.stringify({
+                    title: document.title,
+                    url: location.href,
+                    readyState: document.readyState,
+                    turnstileResponsePresent: Boolean(document.querySelector('[name=cf-turnstile-response]')),
+                    turnstileResponseLength: (document.querySelector('[name=cf-turnstile-response]') || {}).value?.length || 0,
+                    turnstileFrames: Array.from(document.querySelectorAll('iframe')).map(frame => frame.src),
+                    webdriver: navigator.webdriver,
+                    pluginsLength: navigator.plugins.length,
+                    userAgent: navigator.userAgent
+                })
+            """)
+            logging.info("[Turnstile] Challenge diagnostics: %s", details)
+
+            screenshot = self.call_cdp("Page.captureScreenshot", format="png").get("data")
+            if not screenshot or not BUCKET_NAME:
+                return
+
+            timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+            filename = f"tpex_turnstile_{label}_{timestamp}.png"
+            screenshot_path = os.path.join(tempfile.gettempdir(), filename)
+            with open(screenshot_path, "wb") as image_file:
+                image_file.write(base64.b64decode(screenshot))
+
+            blob_name = f"debug/tpex_turnstile/{filename}"
+            upload_to_gcs(BUCKET_NAME, screenshot_path, blob_name)
+            logging.info("[Turnstile] Uploaded challenge screenshot to gs://%s/%s", BUCKET_NAME, blob_name)
+        except Exception as exc:
+            logging.exception("[Turnstile] Failed to capture challenge diagnostics: %s", exc)
+
     def get_token(self, target_url: str) -> str:
         """Retrieve Turnstile token for the target URL."""
         if not self.ws:
@@ -311,7 +346,7 @@ def find_free_port() -> int:
         s.bind(('', 0))
         return s.getsockname()[1]
 
-def get_turnstile_token_sync(target_url: str) -> str:
+def get_turnstile_token_sync(target_url: str, diagnostic_label: str) -> str:
     """Get Turnstile token using Turnstile with a fallback to DrissionPage."""
     # 1. Try lightweight CDP client
     try:
@@ -322,6 +357,7 @@ def get_turnstile_token_sync(target_url: str) -> str:
             token = client.get_token(target_url)
             if token:
                 return token
+            client.capture_turnstile_diagnostics(diagnostic_label)
             logging.error("[Turnstile] Failed to obtain token. Trying fallback option (DrissionPage)...")
         finally:
             client.close()
@@ -456,7 +492,10 @@ def main():
             retries += 1
             logging.info(f"Retrieving Turnstile token for symbol {symbol}, attempt {retries}/3...")
             try:
-                token = get_turnstile_token_sync("https://www.tpex.org.tw/zh-tw/mainboard/trading/info/brokerBS.html")
+                token = get_turnstile_token_sync(
+                    "https://www.tpex.org.tw/zh-tw/mainboard/trading/info/brokerBS.html",
+                    f"{symbol}_attempt_{retries}",
+                )
                 if not token:
                     logging.error(f"Unable to retrieve Turnstile token, skipping stock {symbol}")
                     continue
