@@ -101,7 +101,6 @@ class Turnstile:
             "--disable-features=PrivacySandboxSettings4",
             "--no-sandbox",
             "--disable-dev-shm-usage",
-            "--headless=new",
             "--disable-gpu",
             "--remote-allow-origins=*"
         ]
@@ -374,7 +373,6 @@ def get_turnstile_token_sync(target_url: str, diagnostic_label: str) -> str:
         co.set_argument('--log-level=3')
         co.set_argument('--no-sandbox')
         co.set_argument('--disable-dev-shm-usage')
-        co.set_argument('--headless=new')
         co.set_argument('--disable-gpu')
         page = ChromiumPage(co)
         try:
