@@ -9,9 +9,15 @@ import requests
 import urllib3
 import pandas as pd
 from datetime import datetime
-from DrissionPage import ChromiumPage, ChromiumOptions
+import platform
+import subprocess
+import socket
+import urllib.request
+import urllib.error
 from google.cloud import firestore, storage
 from src.stockanalysis.config import ensure_dir, resolve_output
+from websocket import create_connection
+
 # Suppress SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -19,155 +25,358 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 BUCKET_NAME = os.environ.get('STOCK_CRAWLER_BUCKET')
-MANIFEST_CONTENT = {
-    "manifest_version": 3,
-    "name": "Turnstile Patcher",
-    "version": "0.1",
-    "content_scripts": [{
-        "js": ["./script.js"],
-        "matches": ["<all_urls>"],
-        "run_at": "document_start",
-        "all_frames": True,
-        "world": "MAIN"
-    }]
-}
 
-SCRIPT_CONTENT = """
-function getRandomInt(min, max) {
-    return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-let screenX = getRandomInt(800, 1200);
-let screenY = getRandomInt(400, 600);
-Object.defineProperty(MouseEvent.prototype, 'screenX', { value: screenX });
-Object.defineProperty(MouseEvent.prototype, 'screenY', { value: screenY });
-
-Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-Object.defineProperty(navigator, 'languages', { get: () => ['zh-TW', 'zh'] });
-Object.defineProperty(navigator, 'platform', { get: () => 'Linux x86_64' });
-Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
-Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 1 });
-"""
-
-def _create_extension() -> str:
-    """ Create temp extension file"""
-    temp_dir = tempfile.mkdtemp(prefix='turnstile_extension_')
-    
-    try:
-        manifest_path = os.path.join(temp_dir, 'manifest.json')
-        with open(manifest_path, 'w', encoding='utf-8') as f:
-            json.dump(MANIFEST_CONTENT, f, indent=4)
-        
-        script_path = os.path.join(temp_dir, 'script.js')
-        with open(script_path, 'w', encoding='utf-8') as f:
-            f.write(SCRIPT_CONTENT.strip())
-        logging.debug(f"EXTENSION DIR: {temp_dir}")
-        logging.debug(f"manifest.json:\n{open(manifest_path).read()}")
-        logging.debug(f"script.js:\n{open(script_path).read()}")
-        return temp_dir
-        
-    except Exception as e:
-        _cleanup_extension(temp_dir)
-        raise Exception(f"Create extension failed: {e}")
-
-def _cleanup_extension(path: str):
-    try:
-        if os.path.exists(path):
-            shutil.rmtree(path)
-    except Exception as e:
-        print(f"Cleanup extension file failed: {e}")
-
-def get_patched_browser(options: ChromiumOptions = None,headless = True) -> ChromiumPage:
-    """
-    Create a browser instance with Turnstile bypass functionality.
-    Args:
-        options: A ChromiumOptions object. If None, a default configuration will be created.
-    Returns:
-        Chromium: The configured browser instance.
-    """
-    platform_id = "Windows NT 10.0; Win64; x64"
-    if sys.platform == "linux" or sys.platform == "linux2":
-        platform_id = "X11; Linux x86_64"
-    elif sys.platform == "darwin":
-        platform_id = "Macintosh; Intel Mac OS X 10_15_7"
-    user_agent =f"Mozilla/5.0 ({platform_id}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.7103.113 Safari/537.36"
-
-    if options is None:
-        options = ChromiumOptions().auto_port()
-
-    if headless is True:
-        options.headless(True)
-
-    options.set_user_agent(user_agent)
-    options.set_argument('--disable-dev-shm-usage')
-    options.set_argument('--disable-gpu')
-    options.set_argument("--no-sandbox")
-    options.set_argument('--lang=zh-TW')
-    options.set_argument('--intl.accept_languages=zh-TW,zh')
-    options.set_argument('--window-size=1280,800')
-    options.set_argument('--start-maximized')
-    options.set_argument('--disable-blink-features=AutomationControlled')
-
-    if "--blink-settings=imagesEnabled=false" in options._arguments:
-        raise RuntimeError("To bypass Turnstile, imagesEnabled must be True")
-    if "--incognito" in options._arguments:
-        raise RuntimeError("Cannot bypass Turnstile in incognito mode. Please run in normal browser mode.")
-    
-    try:
-        extension_path = _create_extension()
-        options.add_extension(extension_path)
-        page = ChromiumPage(options)
-        page.run_js("""
-            Object.defineProperty(navigator, 'languages', { get: () => ['zh-TW', 'zh'] });
-            """)
-        logging.debug("[Debug] navigator.webdriver:", page.run_js("return navigator.webdriver"))
-        logging.debug("[Debug] navigator.languages:", page.run_js("return navigator.languages"))
-        logging.debug("[Debug] navigator.plugins:", page.run_js("return navigator.plugins.length"))
-        logging.info(f"[Debug] page UA: {page.run_js('return navigator.userAgent')}")
-
-        shutil.rmtree(extension_path)
-        return page
-    
-    except Exception as e:
-        if 'extension_path' in locals() and os.path.exists(extension_path):
-            shutil.rmtree(extension_path)
-        raise e
-
-def wait_for_turnstile(page, max_retries=10, wait_time=5):
-    """
-    Wait for Turnstile verification to complete and return the token.
-    :param driver: Selenium WebDriver
-    :param max_retries: Maximum number of retries
-    :param wait_time: Wait time between retries (in seconds)
-    :return: Turnstile token or None
-    """
-    logging.debug("Waiting for Turnstile verification to complete...")
-    retries = 0
-    while retries < max_retries:
-        try:
-            logging.info(f"Checking for Turnstile response input field, attempt {retries + 1}/{max_retries}...")
-            has_input = page.run_js(
-                "return !!document.querySelector('input[name=\"cf-turnstile-response\"]')"
-            )
-            print(f"[Debug] cf-turnstile-response present: {has_input}")
-
-            # Attempt to retrieve the Turnstile token
-            token = page.ele('xpath://input[@name="cf-turnstile-response"]').value
-            if token and token.strip():  # If the token exists and is not empty
-                logging.debug(f"Retrieved Turnstile token: {token}")
-                return token
-            else:
-                retries += 1
-                logging.debug(f"Turnstile token is empty, retrying ({retries}/{max_retries})...")
-                time.sleep(wait_time)
-                page.get_screenshot(".", f"{retries}")
-                logging.info(f"screenshot saved for retry {retries}")
-        except Exception as e:
-            retries += 1
-            logging.debug(f"Error while retrieving Turnstile token, retrying ({retries}/{max_retries}): {e}")
-            time.sleep(wait_time)
-
-    logging.error("Reached maximum retries, unable to complete Turnstile verification.")
+def find_chrome_path():
+    """Search for Google Chrome, Chromium, or Microsoft Edge binary depending on OS."""
+    # First, search using shutil.which
+    for name in ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'chrome', 'microsoft-edge', 'microsoft-edge-stable']:
+        path = shutil.which(name)
+        if path:
+            return path
+            
+    # System default paths
+    sys_name = platform.system().lower()
+    if sys_name == 'linux':
+        for path in ['/usr/bin/google-chrome', '/opt/google/chrome/google-chrome', '/usr/bin/chromium-browser']:
+            if os.path.exists(path):
+                return path
+    elif sys_name in ('macos', 'darwin'):
+        paths = [
+            '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+            '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+            '/Applications/Chromium.app/Contents/MacOS/Chromium'
+        ]
+        for path in paths:
+            if os.path.exists(path):
+                return path
+    elif sys_name == 'windows':
+        paths = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        ]
+        for path in paths:
+            if os.path.exists(path):
+                return path
     return None
+
+class Turnstile:
+    def __init__(self, port=9222, user_data_dir=None):
+        self.port = port
+        
+        # Default fallback to a persistent directory in temp folder
+        if user_data_dir is None:
+            user_data_dir = os.path.join(tempfile.gettempdir(), "g4f_chrome_profile_light")
+            
+        self.user_data_dir = user_data_dir
+        self.process = None
+        self.ws = None
+        self.id_counter = 0
+
+    def start_chrome(self):
+        """Launch Chrome with CDP remote debugging port."""
+        chrome_path = find_chrome_path()
+        if not chrome_path:
+            raise RuntimeError("Google Chrome / Chromium executable not found.")
+            
+        logging.info(f"[Turnstile] Launching Chrome/Edge: {chrome_path} on port {self.port}")
+        
+        # Create an isolated profile directory
+        os.makedirs(self.user_data_dir, exist_ok=True)
+        
+        # Launch arguments matching DrissionPage to minimize detection
+        cmd = [
+            chrome_path,
+            f"--remote-debugging-port={self.port}",
+            f"--user-data-dir={self.user_data_dir}",
+            # "--window-position=-2000,-2000",
+            "--window-size=1024,768",
+            "--no-default-browser-check",
+            "--disable-suggestions-ui",
+            "--no-first-run",
+            "--disable-infobars",
+            "--disable-popup-blocking",
+            "--hide-crash-restore-bubble",
+            "--disable-features=PrivacySandboxSettings4",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--remote-allow-origins=*"
+        ]
+        
+        self.process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        self.connect()  # Wait for Chrome to be ready and connect via WebSocket
+    
+    def connect(self):
+        # Wait for CDP port readiness and retrieve the WebSocket URL
+        ws_url = None
+        for i in range(40):  # Up to 20 seconds
+            time.sleep(0.5)
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/json", timeout=2) as req:
+                    targets = json.loads(req.read().decode('utf-8'))
+                    for target in targets:
+                        if target.get('type') in ('page', 'webview'):
+                            ws_url = target.get('webSocketDebuggerUrl')
+                            break
+                    if ws_url:
+                        break
+            except (urllib.error.URLError, ConnectionResetError, ConnectionRefusedError):
+                pass
+                
+        if not ws_url:
+            browser_error = ""
+            if self.process and self.process.poll() is not None and self.process.stderr:
+                browser_error = self.process.stderr.read().strip()
+            self.close()
+            detail = f": {browser_error}" if browser_error else ""
+            raise RuntimeError(
+                f"Failed to connect to Chrome debugging port 127.0.0.1:{self.port}{detail}"
+            )
+            
+        logging.info(f"[Turnstile] Connected to CDP WebSocket: {ws_url}")
+        self.ws = create_connection(ws_url)
+        
+        # Enable necessary CDP domains
+        self.call_cdp("Page.enable")
+        self.call_cdp("DOM.enable")
+        self.call_cdp("Runtime.enable")
+        self.call_cdp("Emulation.setFocusEmulationEnabled", enabled=True)
+
+    def call_cdp(self, method, **params):
+        """Call CDP method and wait for response."""
+        self.id_counter += 1
+        payload = {
+            "id": self.id_counter,
+            "method": method,
+            "params": params
+        }
+        self.ws.send(json.dumps(payload))
+        
+        while True:
+            response = json.loads(self.ws.recv())
+            if response.get("id") == self.id_counter:
+                if "error" in response:
+                    raise RuntimeError(f"CDP Error calling {method}: {response['error']}")
+                return response.get("result", {})
+
+    def evaluate_js(self, expression):
+        """Execute JS code on the page and return the result."""
+        res = self.call_cdp("Runtime.evaluate", expression=expression, returnByValue=True)
+        return res.get("result", {}).get("value")
+
+    def get_token(self, target_url: str) -> str:
+        """Retrieve Turnstile token for the target URL."""
+        if not self.ws:
+            self.start_chrome()
+            
+        logging.info(f"[Turnstile] Navigating to {target_url}...")
+        self.call_cdp("Page.navigate", url=target_url)
+        
+        # Give some time to load
+        time.sleep(3.0)
+        
+        # If target URL is deepinfra, we perform the deepinfra-specific textarea typing interaction
+        if "deepinfra.com" in target_url:
+            # Inject completions request blocker ONLY in main frame
+            fetch_blocker_js = """
+            const origFetch = window.fetch;
+            window.fetch = async function(...args) {
+                let url = args[0];
+                if (typeof url === 'string' && url.includes('/chat/completions')) {
+                    return new Response('{}', {status: 200});
+                }
+                return origFetch.apply(this, args);
+            };
+            """
+            self.evaluate_js(fetch_blocker_js)
+            
+            # Try to click "Accept" on cookies consent popup if present
+            self.evaluate_js("""
+            (() => {
+                const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Accept');
+                if (btn) btn.click();
+            })()
+            """)
+            
+            # Wait for textarea readiness, focus and input text
+            logging.info("[Turnstile] Waiting for active textarea...")
+            text_entered = False
+            for _ in range(40):  # Up to 20 seconds
+                try:
+                    ready = self.evaluate_js("""
+                    (() => {
+                        const ta = document.querySelector('textarea');
+                        if (!ta) return 'no_textarea';
+                        if (ta.disabled) return 'disabled';
+                        ta.click();
+                        ta.focus();
+                        ta.scrollIntoView({ block: 'center' });
+                        return 'ready';
+                    })()
+                    """)
+                    
+                    if ready == 'ready':
+                        logging.info("[Turnstile] Textarea found, focusing and entering text...")
+                        
+                        # Retrieve textarea nodeId for native focusing
+                        doc = self.call_cdp('DOM.getDocument')
+                        root_id = doc['root']['nodeId']
+                        textarea = self.call_cdp('DOM.querySelector', nodeId=root_id, selector='textarea')
+                        
+                        # Native focus via CDP
+                        self.call_cdp('DOM.focus', nodeId=textarea['nodeId'])
+                        
+                        # Enter text via native CDP command
+                        self.call_cdp("Input.insertText", text="Test Prompt")
+                        
+                        # Give React some time to process input before pressing Enter
+                        time.sleep(0.5)
+                        
+                        # Simulate Enter keypress via native CDP events
+                        self.call_cdp("Input.dispatchKeyEvent", 
+                                      type="keyDown", 
+                                      windowsVirtualKeyCode=13, 
+                                      key="Enter", 
+                                      code="Enter", 
+                                      text="\r", 
+                                      unmodifiedText="\r")
+                        self.call_cdp("Input.dispatchKeyEvent", 
+                                      type="keyUp", 
+                                      windowsVirtualKeyCode=13, 
+                                      key="Enter", 
+                                      code="Enter", 
+                                      text="\r", 
+                                      unmodifiedText="\r")
+                        
+                        text_entered = True
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.5)
+                
+            if not text_entered:
+                logging.error("[-] Turnstile initiation error: textarea not found or disabled.")
+                return ""
+        else:
+            # General site handling: perform some basic interaction to ensure Turnstile triggers
+            logging.info("[Turnstile] Performing page interaction (scrolling)...")
+            self.evaluate_js("window.scrollTo(0, 100);")
+            
+        # Poll page for Turnstile token presence
+        logging.info("[Turnstile] Waiting for Cloudflare Turnstile solve...")
+        token_js = "document.querySelector('[name=cf-turnstile-response]') ? document.querySelector('[name=cf-turnstile-response]').value : ''"
+        token = ""
+        for i in range(120):  # Up to 60 seconds
+            try:
+                token = self.evaluate_js(token_js)
+                if token:
+                    logging.info(f"[Turnstile] Token generated on check {i+1}!")
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+            
+        return token
+ 
+    def close(self):
+        """Close connection and terminate Chrome process."""
+        if self.ws:
+            try:
+                self.ws.close()
+            except Exception:
+                pass
+            self.ws = None
+            
+        if self.process:
+            try:
+                self.process.terminate()
+                self.process.wait(timeout=5)
+            except Exception:
+                try:
+                    self.process.kill()
+                except Exception:
+                    pass
+            self.process = None
+
+def find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))
+        return s.getsockname()[1]
+
+def get_turnstile_token_sync(target_url: str) -> str:
+    """Get Turnstile token using Turnstile with a fallback to DrissionPage."""
+    # 1. Try lightweight CDP client
+    try:
+        port = find_free_port()
+        user_data_dir = os.path.join(tempfile.gettempdir(), "g4f_chrome_profile_light")
+        client = Turnstile(port=port, user_data_dir=user_data_dir)
+        try:
+            token = client.get_token(target_url)
+            if token:
+                return token
+            logging.error("[Turnstile] Failed to obtain token. Trying fallback option (DrissionPage)...")
+        finally:
+            client.close()
+    except Exception as e:
+        logging.error(f"[Turnstile] CDP Error: {e}. Trying fallback option (DrissionPage)...")
+
+    # 2. Fallback option: try original DrissionPage if installed
+    try:
+        from DrissionPage import ChromiumPage, ChromiumOptions
+        co = ChromiumOptions()
+        co.set_local_port(find_free_port())
+        # co.set_argument('--window-position=-2000,-2000') # keep visible
+        co.set_argument('--window-size=1024,768')
+        co.set_argument('--log-level=3')
+        co.set_argument('--no-sandbox')
+        co.set_argument('--disable-dev-shm-usage')
+        page = ChromiumPage(co)
+        try:
+            page.get(target_url)
+            
+            if "deepinfra.com" in target_url:
+                # Block completions requests
+                js_block_fetch = """
+                const origFetch = window.fetch;
+                window.fetch = async function(...args) {
+                    let url = args[0];
+                    if (typeof url === 'string' && url.includes('/chat/completions')) {
+                        return new Response('{}', {status: 200});
+                    }
+                    return origFetch.apply(this, args);
+                };
+                """
+                page.run_js(js_block_fetch)
+                
+                textarea = page.ele('tag:textarea', timeout=15)
+                if textarea:
+                    textarea.input('Test Prompt')
+                    textarea.input('\n')
+            else:
+                page.scroll.down(100)
+                
+            token_input = page.ele('@name=cf-turnstile-response', timeout=20)
+            if token_input:
+                for _ in range(40):
+                    token = token_input.attr('value')
+                    if token:
+                        return token
+                    time.sleep(0.5)
+        finally:
+            try:
+                page.quit()
+            except:
+                pass
+    except Exception as e:
+        logging.error(f"[Turnstile] Fallback DrissionPage method error: {e}")
+
+    return ""
 
 def crawl_stock_data(stock, token, output_path):
     """Crawl stock data and save it as a CSV file."""
@@ -241,27 +450,17 @@ def main():
         retries = 0 
         while retries < 3 and not success:
             retries += 1
-            logging.info(f"start get patched browser")
-            page = get_patched_browser(headless=False)
-            logging.info(f"finish get patched browser")
-
+            logging.info(f"Retrieving Turnstile token for symbol {symbol}, attempt {retries}/3...")
             try:
-                # Open target page
-                logging.info(f"start get tpex page")
-                page.get("https://www.tpex.org.tw/zh-tw/mainboard/trading/info/brokerBS.html")
-                logging.info(f"finish get tpex page")
-
-                # Wait for Turnstile verification
-                token = wait_for_turnstile(page)
+                token = get_turnstile_token_sync("https://www.tpex.org.tw/zh-tw/mainboard/trading/info/brokerBS.html")
                 if not token:
                     logging.error(f"Unable to retrieve Turnstile token, skipping stock {symbol}")
                     continue
 
                 # Crawl data
-                success = crawl_stock_data(symbol, token, output_path) 
-            finally:
-                page.quit()
-                logging.info(f"Driver for stock {symbol} closed after {retries} retries")
+                success = crawl_stock_data(symbol, token, output_path)
+            except Exception as e:
+                logging.error(f"Error during crawl attempt {retries}: {e}")
 
         if success:
             if os.path.exists(output_path):
