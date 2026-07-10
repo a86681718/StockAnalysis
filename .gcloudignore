@@ -13,6 +13,7 @@ env/
 
 # Local/editor files
 .vscode/
+.gcloud/
 .DS_Store
 **/.DS_Store
 
