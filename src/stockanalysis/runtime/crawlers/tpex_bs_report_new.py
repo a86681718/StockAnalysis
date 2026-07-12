@@ -34,13 +34,15 @@ BUCKET_NAME = os.environ.get('STOCK_CRAWLER_BUCKET')
 def load_proxies() -> list[str]:
     raw_proxies = os.environ.get("TPEX_PROXIES") or os.environ.get("PROXY", "")
     proxies = [line.strip() for line in raw_proxies.splitlines() if line.strip()]
+    if not proxies:
+        raise ValueError("TPEX_PROXIES must contain at least one proxy URL.")
     for proxy in proxies:
         parsed = urlparse(proxy)
         if parsed.scheme not in {"http", "https", "socks4", "socks5"} or not parsed.hostname:
             raise ValueError(
                 "Each TPEX proxy must be a URL such as http://user:password@host:port."
             )
-    return [""] + proxies
+    return proxies
 
 
 def proxy_label(proxy: str) -> str:
