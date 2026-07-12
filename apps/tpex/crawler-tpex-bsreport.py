@@ -16,4 +16,4 @@ for candidate in candidate_roots:
 
 
 if __name__ == "__main__":
-    runpy.run_module("stockanalysis.runtime.crawlers.tpex_bs_report", run_name="__main__")
+    runpy.run_module("stockanalysis.runtime.crawlers.tpex_bs_report_new", run_name="__main__")
