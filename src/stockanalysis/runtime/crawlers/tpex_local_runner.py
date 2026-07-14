@@ -12,7 +12,6 @@ import subprocess
 import socket
 import urllib.request
 import urllib.error
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from websocket import create_connection
 
@@ -303,67 +302,8 @@ def load_traded_symbols(target_date):
 
     return stock_symbols + warrant_symbols
 
-def crawl_symbols(worker_id, indexed_symbols, total_symbols, output_dir):
-    browser = BrowserManager()
-    target_url = "https://www.tpex.org.tw/zh-tw/mainboard/trading/info/brokerBS.html"
-    success_count = 0
-    failure_count = 0
-
-    try:
-        for idx, symbol in indexed_symbols:
-            output_path = os.path.join(output_dir, f"{symbol}.csv")
-            if os.path.exists(output_path):
-                logging.info(
-                    f"[Worker {worker_id}] [{idx}/{total_symbols}] "
-                    f"Stock {symbol} CSV already exists, skipping."
-                )
-                success_count += 1
-                continue
-
-            logging.info(
-                f"[Worker {worker_id}] [{idx}/{total_symbols}] Processing stock {symbol}..."
-            )
-
-            success = False
-            retries = 0
-            last_reason = "unknown"
-            while retries < 3 and not success:
-                retries += 1
-                token = browser.get_token(target_url)
-                if not token:
-                    last_reason = "Turnstile token was empty"
-                    logging.error(
-                        f"[Worker {worker_id}] Failed to obtain Turnstile token for "
-                        f"symbol {symbol} (attempt {retries}/3): {last_reason}"
-                    )
-                    continue
-
-                success, last_reason = crawl_stock_data(symbol, token, output_dir)
-                if not success:
-                    logging.warning(
-                        f"[Worker {worker_id}] Crawl failed for symbol {symbol} "
-                        f"(attempt {retries}/3): {last_reason}"
-                    )
-                    time.sleep(1)
-
-            if success:
-                success_count += 1
-            else:
-                failure_count += 1
-                logging.error(
-                    f"[Worker {worker_id}] FINAL FAILURE for symbol {symbol} after "
-                    f"{retries} attempts: {last_reason}"
-                )
-
-            time.sleep(0.5)
-    finally:
-        browser.close()
-
-    return success_count, failure_count
-
 def main():
     limit = None
-    workers = 1
     # Parse simple arguments
     for idx, arg in enumerate(sys.argv):
         if arg.startswith('--limit='):
@@ -376,21 +316,6 @@ def main():
                 limit = int(sys.argv[idx + 1])
             except ValueError:
                 pass
-        elif arg.startswith('--workers='):
-            try:
-                workers = int(arg.split('=')[1])
-            except ValueError:
-                pass
-        elif arg == '--workers' and idx + 1 < len(sys.argv):
-            try:
-                workers = int(sys.argv[idx + 1])
-            except ValueError:
-                pass
-
-    if workers < 1:
-        logging.error("--workers must be at least 1")
-        sys.exit(2)
-
     data_dt = datetime.now().strftime('%Y%m%d')
 
     # Setup local output directory
@@ -424,32 +349,55 @@ def main():
         logging.info("No symbols to process.")
         return
 
+    browser = BrowserManager()
+    target_url = "https://www.tpex.org.tw/zh-tw/mainboard/trading/info/brokerBS.html"
     success_count = 0
     failure_count = 0
-    worker_count = min(workers, total_symbols)
-    symbol_groups = [[] for _ in range(worker_count)]
-    for idx, symbol in enumerate(symbols, 1):
-        symbol_groups[(idx - 1) % worker_count].append((idx, symbol))
-
-    logging.info(f"Starting {worker_count} browser worker(s).")
     try:
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            futures = [
-                executor.submit(
-                    crawl_symbols,
-                    worker_id,
-                    symbol_group,
-                    total_symbols,
-                    output_dir,
+        for idx, symbol in enumerate(symbols, 1):
+            output_path = os.path.join(output_dir, f"{symbol}.csv")
+            if os.path.exists(output_path):
+                logging.info(f"[{idx}/{total_symbols}] Stock {symbol} CSV already exists, skipping.")
+                success_count += 1
+                continue
+
+            logging.info(f"[{idx}/{total_symbols}] Processing stock {symbol}...")
+            success = False
+            retries = 0
+            last_reason = "unknown"
+            while retries < 3 and not success:
+                retries += 1
+                token = browser.get_token(target_url)
+                if not token:
+                    last_reason = "Turnstile token was empty"
+                    logging.error(
+                        f"Failed to obtain Turnstile token for symbol {symbol} "
+                        f"(attempt {retries}/3): {last_reason}"
+                    )
+                    continue
+
+                success, last_reason = crawl_stock_data(symbol, token, output_dir)
+                if not success:
+                    logging.warning(
+                        f"Crawl failed for symbol {symbol} (attempt {retries}/3): "
+                        f"{last_reason}"
+                    )
+                    time.sleep(1)
+
+            if success:
+                success_count += 1
+            else:
+                failure_count += 1
+                logging.error(
+                    f"FINAL FAILURE for symbol {symbol} after {retries} attempts: "
+                    f"{last_reason}"
                 )
-                for worker_id, symbol_group in enumerate(symbol_groups, 1)
-            ]
-            for future in futures:
-                worker_successes, worker_failures = future.result()
-                success_count += worker_successes
-                failure_count += worker_failures
+
+            time.sleep(0.5)
     except KeyboardInterrupt:
         logging.info("Process interrupted by user.")
+    finally:
+        browser.close()
 
     logging.info(f"Process completed. Success: {success_count}, Failures: {failure_count}")
 
