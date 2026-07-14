@@ -231,7 +231,7 @@ class BrowserManager:
             self.client = None
 
 def crawl_stock_data(stock, token, output_dir):
-    """Crawl stock data from TPEX and save as CSV."""
+    """Crawl stock data from TPEX and return success plus a diagnostic reason."""
     url = "https://www.tpex.org.tw/www/zh-tw/afterTrading/brokerBS"
     headers = {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -246,30 +246,34 @@ def crawl_stock_data(stock, token, output_dir):
     try:
         response = requests.post(url, data=payload, headers=headers, timeout=15, verify=False)
         response.raise_for_status()
-        if response.ok:
-            data = response.json()
-            if 'tables' in data and len(data['tables']) > 1:
-                table = data['tables'][1]
-                rows = table.get('data', [])
-                if rows:
-                    import pandas as pd
-                    pdf = pd.DataFrame(rows, columns=table['fields'])
-                    pdf['日期'] = datetime.now().strftime('%Y/%m/%d')
-                    pdf['券商'] = pdf['券商'].str.split().str[0]
-                    pdf.drop(columns=['序號'], inplace=True)
+        data = response.json()
+        tables = data.get('tables')
+        if not isinstance(tables, list) or len(tables) <= 1:
+            return False, f"invalid tables structure: table_count={len(tables) if isinstance(tables, list) else 'missing'}"
 
-                    output_path = os.path.join(output_dir, f"{stock}.csv")
-                    pdf.to_csv(output_path, encoding='utf8', index=False)
-                    logging.info(f"[Crawler] Successfully saved CSV for stock {stock} ({len(rows)} records) to {output_path}")
-                    return True
-                else:
-                    logging.warning(f"[Crawler] No records found in table for stock {stock}")
-            else:
-                logging.warning(f"[Crawler] No data found in tables for stock {stock}")
-        return False
+        table = tables[1]
+        rows = table.get('data', [])
+        fields = table.get('fields', [])
+        if not rows:
+            return False, f"empty broker table: table_count={len(tables)}, fields={fields}"
+
+        pdf = pd.DataFrame(rows, columns=fields)
+        pdf['日期'] = datetime.now().strftime('%Y/%m/%d')
+        pdf['券商'] = pdf['券商'].str.split().str[0]
+        pdf.drop(columns=['序號'], inplace=True)
+
+        output_path = os.path.join(output_dir, f"{stock}.csv")
+        pdf.to_csv(output_path, encoding='utf8', index=False)
+        logging.info(f"[Crawler] Successfully saved CSV for stock {stock} ({len(rows)} records) to {output_path}")
+        return True, f"saved_rows={len(rows)}"
+    except ValueError as e:
+        reason = f"invalid JSON response: {e}"
+        logging.error(f"[Crawler] Stock {stock}: {reason}")
+        return False, reason
     except Exception as e:
-        logging.error(f"[Crawler] Failed to fetch data for stock {stock}: {e}")
-        return False
+        reason = f"{type(e).__name__}: {e}"
+        logging.error(f"[Crawler] Stock {stock}: request or save failed: {reason}")
+        return False, reason
 
 def traded_symbols(daily):
     traded_volume = pd.to_numeric(
@@ -322,21 +326,23 @@ def crawl_symbols(worker_id, indexed_symbols, total_symbols, output_dir):
 
             success = False
             retries = 0
+            last_reason = "unknown"
             while retries < 3 and not success:
                 retries += 1
                 token = browser.get_token(target_url)
                 if not token:
+                    last_reason = "Turnstile token was empty"
                     logging.error(
                         f"[Worker {worker_id}] Failed to obtain Turnstile token for "
-                        f"symbol {symbol} (attempt {retries}/3)"
+                        f"symbol {symbol} (attempt {retries}/3): {last_reason}"
                     )
                     continue
 
-                success = crawl_stock_data(symbol, token, output_dir)
+                success, last_reason = crawl_stock_data(symbol, token, output_dir)
                 if not success:
                     logging.warning(
                         f"[Worker {worker_id}] Crawl failed for symbol {symbol} "
-                        f"(attempt {retries}/3)"
+                        f"(attempt {retries}/3): {last_reason}"
                     )
                     time.sleep(1)
 
@@ -344,6 +350,10 @@ def crawl_symbols(worker_id, indexed_symbols, total_symbols, output_dir):
                 success_count += 1
             else:
                 failure_count += 1
+                logging.error(
+                    f"[Worker {worker_id}] FINAL FAILURE for symbol {symbol} after "
+                    f"{retries} attempts: {last_reason}"
+                )
 
             time.sleep(0.5)
     finally:
