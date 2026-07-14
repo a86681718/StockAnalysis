@@ -14,8 +14,15 @@ import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from google.cloud import firestore
 from websocket import create_connection
+
+import pandas as pd
+
+SRC_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+if SRC_ROOT not in sys.path:
+    sys.path.insert(0, SRC_ROOT)
+
+from stockanalysis.runtime.crawlers.tpex_daily_ohlc import fetch_tpex_daily
 
 # Suppress SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -264,6 +271,19 @@ def crawl_stock_data(stock, token, output_dir):
         logging.error(f"[Crawler] Failed to fetch data for stock {stock}: {e}")
         return False
 
+def load_traded_symbols(target_date):
+    """Load symbols with trading activity from the TPEX OHLC API source."""
+    daily = fetch_tpex_daily(target_date)
+    if daily.empty or "代號" not in daily.columns or "成交股數" not in daily.columns:
+        return []
+
+    traded_volume = pd.to_numeric(
+        daily["成交股數"].astype(str).str.replace(",", "", regex=False),
+        errors="coerce",
+    )
+    symbols = daily.loc[traded_volume > 0, "代號"].astype(str).str.strip()
+    return symbols[symbols.ne("")].drop_duplicates().tolist()
+
 def crawl_symbols(worker_id, indexed_symbols, total_symbols, output_dir):
     browser = BrowserManager()
     target_url = "https://www.tpex.org.tw/zh-tw/mainboard/trading/info/brokerBS.html"
@@ -347,7 +367,6 @@ def main():
         sys.exit(2)
 
     data_dt = datetime.now().strftime('%Y%m%d')
-    collection_name = f"tpex_crawl_status_{data_dt}"
 
     # Setup local output directory
     project_root = os.path.abspath(os.path.dirname(__file__))
@@ -355,19 +374,15 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
     logging.info(f"Local CSV files will be saved to: {output_dir}")
 
-    # Retrieve symbols from Firestore
-    logging.info("Connecting to Firestore to fetch symbol list...")
+    # Retrieve symbols directly from the TPEX OHLC API source.
     try:
-        db = firestore.Client()
-        col = db.collection(collection_name)
-        docs = col.stream()
-        symbols = [doc.id for doc in docs]
+        symbols = load_traded_symbols(datetime.now())
     except Exception as e:
-        logging.error(f"Failed to fetch symbols from Firestore: {e}")
+        logging.error(f"Failed to fetch today's TPEX OHLC data: {e}")
         sys.exit(1)
 
     total_symbols = len(symbols)
-    logging.info(f"Retrieved {total_symbols} symbols from collection '{collection_name}'")
+    logging.info(f"Retrieved {total_symbols} symbols with trading volume from today's TPEX OHLC data")
 
     # Prioritize 4-digit stock symbols, then others
     four_digits = [s for s in symbols if len(s) == 4]
