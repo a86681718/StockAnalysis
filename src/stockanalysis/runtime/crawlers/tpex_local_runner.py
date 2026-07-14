@@ -271,18 +271,33 @@ def crawl_stock_data(stock, token, output_dir):
         logging.error(f"[Crawler] Failed to fetch data for stock {stock}: {e}")
         return False
 
-def load_traded_symbols(target_date):
-    """Load symbols with trading activity from the TPEX OHLC API source."""
-    daily = fetch_tpex_daily(target_date)
-    if daily.empty or "代號" not in daily.columns or "成交股數" not in daily.columns:
-        return []
-
+def traded_symbols(daily):
     traded_volume = pd.to_numeric(
         daily["成交股數"].astype(str).str.replace(",", "", regex=False),
         errors="coerce",
     )
     symbols = daily.loc[traded_volume > 0, "代號"].astype(str).str.strip()
     return symbols[symbols.ne("")].drop_duplicates().tolist()
+
+def load_traded_symbols(target_date):
+    """Load traded TPEX stocks and call/put warrants from the OHLC API."""
+    stocks = fetch_tpex_daily(target_date, security_type="EW")
+    warrants = fetch_tpex_daily(target_date, security_type="WW")
+
+    if not stocks.empty and {"代號", "成交股數"}.issubset(stocks.columns):
+        stocks = stocks[stocks["代號"].astype(str).str.strip().str.len() == 4]
+        stock_symbols = traded_symbols(stocks)
+    else:
+        stock_symbols = []
+
+    if not warrants.empty and {"代號", "名稱", "成交股數"}.issubset(warrants.columns):
+        warrant_name = warrants["名稱"].astype(str).str.strip()
+        warrants = warrants[warrant_name.str.contains("購|售", regex=True)]
+        warrant_symbols = traded_symbols(warrants)
+    else:
+        warrant_symbols = []
+
+    return stock_symbols + warrant_symbols
 
 def crawl_symbols(worker_id, indexed_symbols, total_symbols, output_dir):
     browser = BrowserManager()

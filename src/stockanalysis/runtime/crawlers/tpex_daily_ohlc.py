@@ -31,9 +31,12 @@ def latest_existing_date(path: str) -> datetime:
     return max(dates)
 
 
-def fetch_tpex_daily(target: datetime) -> pd.DataFrame:
+def fetch_tpex_daily(target: datetime, security_type: str = "AL") -> pd.DataFrame:
     api_date = target.strftime(API_DATE_FMT)
-    url = f"https://www.tpex.org.tw/www/zh-tw/afterTrading/otc?date={parse.quote_plus(api_date)}&type=AL&id=&response=json"
+    url = (
+        "https://www.tpex.org.tw/www/zh-tw/afterTrading/otc?"
+        f"date={parse.quote_plus(api_date)}&type={security_type}&id=&response=json"
+    )
     resp = requests.post(url, timeout=30)
     resp.raise_for_status()
     payload = json.loads(resp.text)
