@@ -7,8 +7,11 @@ from urllib import parse
 
 import pandas as pd
 import requests
+import urllib3
 
 from stockanalysis.config import resolve_data
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 DATA_FOLDER = str(resolve_data())
 SUBFOLDER = 'ohlc'
@@ -37,7 +40,9 @@ def fetch_tpex_daily(target: datetime, security_type: str = "AL") -> pd.DataFram
         "https://www.tpex.org.tw/www/zh-tw/afterTrading/otc?"
         f"date={parse.quote_plus(api_date)}&type={security_type}&id=&response=json"
     )
-    resp = requests.post(url, timeout=30)
+    # TPEX can present a certificate chain that fails validation on some local
+    # Python/OpenSSL builds, although the endpoint is reachable in browsers.
+    resp = requests.post(url, timeout=30, verify=False)
     resp.raise_for_status()
     payload = json.loads(resp.text)
     tables = payload.get('tables', [])
