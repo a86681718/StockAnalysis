@@ -1,6 +1,7 @@
 import argparse
 import os
 import json
+import time
 from datetime import datetime, timedelta
 from typing import Optional
 from urllib import parse
@@ -42,9 +43,21 @@ def fetch_tpex_daily(target: datetime, security_type: str = "AL") -> pd.DataFram
     )
     # TPEX can present a certificate chain that fails validation on some local
     # Python/OpenSSL builds, although the endpoint is reachable in browsers.
-    resp = requests.post(url, timeout=30, verify=False)
-    resp.raise_for_status()
-    payload = json.loads(resp.text)
+    last_error = None
+    for attempt in range(1, 4):
+        try:
+            resp = requests.post(url, timeout=30, verify=False)
+            resp.raise_for_status()
+            payload = json.loads(resp.text)
+            break
+        except (requests.RequestException, json.JSONDecodeError) as exc:
+            last_error = exc
+            if attempt == 3:
+                raise
+            time.sleep(attempt)
+    else:
+        raise last_error
+
     tables = payload.get('tables', [])
     if not tables:
         return pd.DataFrame()

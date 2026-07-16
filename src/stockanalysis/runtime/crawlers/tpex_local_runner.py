@@ -342,11 +342,15 @@ def main():
     try:
         symbols = load_traded_symbols(target_date)
     except Exception as e:
-        logging.error(f"Failed to fetch today's TPEX OHLC data: {e}")
+        logging.error(
+            f"Failed to fetch TPEX OHLC data for {data_dt}: {e}"
+        )
         sys.exit(1)
 
     total_symbols = len(symbols)
-    logging.info(f"Retrieved {total_symbols} symbols with trading volume from today's TPEX OHLC data")
+    logging.info(
+        f"Retrieved {total_symbols} symbols with trading volume from TPEX OHLC data for {data_dt}"
+    )
 
     # Prioritize 4-digit stock symbols, then others
     four_digits = [s for s in symbols if len(s) == 4]
