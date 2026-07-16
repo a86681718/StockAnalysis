@@ -229,7 +229,7 @@ class BrowserManager:
             self.client.close()
             self.client = None
 
-def crawl_stock_data(stock, token, output_dir):
+def crawl_stock_data(stock, token, output_dir, data_date=None):
     """Crawl stock data from TPEX and return success plus a diagnostic reason."""
     url = "https://www.tpex.org.tw/www/zh-tw/afterTrading/brokerBS"
     headers = {
@@ -257,7 +257,8 @@ def crawl_stock_data(stock, token, output_dir):
             return False, f"empty broker table: table_count={len(tables)}, fields={fields}"
 
         pdf = pd.DataFrame(rows, columns=fields)
-        pdf['日期'] = datetime.now().strftime('%Y/%m/%d')
+        report_date = data_date or datetime.now()
+        pdf['日期'] = report_date.strftime('%Y/%m/%d')
         pdf['券商'] = pdf['券商'].str.split().str[0]
         pdf.drop(columns=['序號'], inplace=True)
 
@@ -304,6 +305,7 @@ def load_traded_symbols(target_date):
 
 def main():
     limit = None
+    target_date = datetime.now()
     # Parse simple arguments
     for idx, arg in enumerate(sys.argv):
         if arg.startswith('--limit='):
@@ -316,7 +318,19 @@ def main():
                 limit = int(sys.argv[idx + 1])
             except ValueError:
                 pass
-    data_dt = datetime.now().strftime('%Y%m%d')
+        elif arg.startswith('--date='):
+            try:
+                target_date = datetime.strptime(arg.split('=', 1)[1], '%Y%m%d')
+            except ValueError:
+                logging.error("--date must use YYYYMMDD format, for example 20260717")
+                sys.exit(2)
+        elif arg == '--date' and idx + 1 < len(sys.argv):
+            try:
+                target_date = datetime.strptime(sys.argv[idx + 1], '%Y%m%d')
+            except ValueError:
+                logging.error("--date must use YYYYMMDD format, for example 20260717")
+                sys.exit(2)
+    data_dt = target_date.strftime('%Y%m%d')
 
     # Setup local output directory
     project_root = os.path.abspath(os.path.dirname(__file__))
@@ -326,7 +340,7 @@ def main():
 
     # Retrieve symbols directly from the TPEX OHLC API source.
     try:
-        symbols = load_traded_symbols(datetime.now())
+        symbols = load_traded_symbols(target_date)
     except Exception as e:
         logging.error(f"Failed to fetch today's TPEX OHLC data: {e}")
         sys.exit(1)
@@ -376,7 +390,9 @@ def main():
                     )
                     continue
 
-                success, last_reason = crawl_stock_data(symbol, token, output_dir)
+                success, last_reason = crawl_stock_data(
+                    symbol, token, output_dir, data_date=target_date
+                )
                 if not success:
                     logging.warning(
                         f"Crawl failed for symbol {symbol} (attempt {retries}/3): "
