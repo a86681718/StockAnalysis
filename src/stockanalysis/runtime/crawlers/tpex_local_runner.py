@@ -334,7 +334,11 @@ def main():
 
     # Setup local output directory
     project_root = os.path.abspath(os.path.dirname(__file__))
-    output_dir = os.path.join(project_root, "outputs", "tmp", "tpex_bs_report", data_dt)
+    output_root = os.getenv(
+        "TPEX_LOCAL_OUTPUT_DIR",
+        os.path.join(project_root, "outputs", "tmp", "tpex_bs_report"),
+    )
+    output_dir = os.path.join(output_root, data_dt)
     os.makedirs(output_dir, exist_ok=True)
     logging.info(f"Local CSV files will be saved to: {output_dir}")
 
