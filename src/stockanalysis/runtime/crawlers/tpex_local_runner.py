@@ -367,14 +367,23 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
     logging.info(f"Local CSV files will be saved to: {output_dir}")
 
+    try:
+        traded = load_traded_symbols(target_date)
+    except Exception as e:
+        logging.error(f"Failed to fetch TPEX OHLC data for {data_dt}: {e}")
+        return 1
+
     if symbols is None:
-        try:
-            symbols = load_traded_symbols(target_date)
-        except Exception as e:
-            logging.error(f"Failed to fetch TPEX OHLC data for {data_dt}: {e}")
-            return 1
+        symbols = traded
     else:
         logging.info("Received %s symbols from Cloud Run trigger: %s", len(symbols), symbols)
+        traded_set = set(traded)
+        excluded = [symbol for symbol in symbols if symbol not in traded_set]
+        symbols = [symbol for symbol in symbols if symbol in traded_set]
+        for symbol in excluded:
+            logging.warning("Symbol %s is not in the traded OHLC scope, skipping.", symbol)
+            if fs_client:
+                fs_client.collection(f"tpex_crawl_status_{data_dt}").document(symbol).delete()
 
     total_symbols = len(symbols)
     logging.info(
