@@ -424,6 +424,7 @@ def main():
         browser.close()
 
     logging.info(f"Process completed. Success: {success_count}, Failures: {failure_count}")
+    return 1 if failure_count else 0
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
