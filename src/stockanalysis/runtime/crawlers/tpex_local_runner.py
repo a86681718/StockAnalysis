@@ -12,6 +12,7 @@ import subprocess
 import socket
 import urllib.request
 import urllib.error
+import re
 from datetime import datetime
 from websocket import create_connection
 
@@ -303,34 +304,58 @@ def load_traded_symbols(target_date):
 
     return stock_symbols + warrant_symbols
 
-def main():
+def parse_runtime_args():
+    """Parse local flags or the symbol batch format used by the Cloud Run trigger."""
     limit = None
     target_date = datetime.now()
-    # Parse simple arguments
-    for idx, arg in enumerate(sys.argv):
+    symbols = None
+    raw_args = sys.argv[1:]
+
+    if raw_args and not raw_args[0].startswith("--"):
+        if re.fullmatch(r"\d{8}", raw_args[-1]):
+            target_date = datetime.strptime(raw_args.pop(), "%Y%m%d")
+        symbols_text = ",".join(raw_args).strip().strip("[]")
+        symbols = [
+            symbol.strip().strip("'\"")
+            for symbol in symbols_text.split(",")
+            if symbol.strip().strip("'\"")
+        ]
+        return target_date, limit, symbols
+
+    for idx, arg in enumerate(raw_args):
         if arg.startswith('--limit='):
-            try:
-                limit = int(arg.split('=')[1])
-            except ValueError:
-                pass
-        elif arg == '--limit' and idx + 1 < len(sys.argv):
-            try:
-                limit = int(sys.argv[idx + 1])
-            except ValueError:
-                pass
+            limit = int(arg.split('=', 1)[1])
+        elif arg == '--limit' and idx + 1 < len(raw_args):
+            limit = int(raw_args[idx + 1])
         elif arg.startswith('--date='):
-            try:
-                target_date = datetime.strptime(arg.split('=', 1)[1], '%Y%m%d')
-            except ValueError:
-                logging.error("--date must use YYYYMMDD format, for example 20260717")
-                sys.exit(2)
-        elif arg == '--date' and idx + 1 < len(sys.argv):
-            try:
-                target_date = datetime.strptime(sys.argv[idx + 1], '%Y%m%d')
-            except ValueError:
-                logging.error("--date must use YYYYMMDD format, for example 20260717")
-                sys.exit(2)
+            target_date = datetime.strptime(arg.split('=', 1)[1], '%Y%m%d')
+        elif arg == '--date' and idx + 1 < len(raw_args):
+            target_date = datetime.strptime(raw_args[idx + 1], '%Y%m%d')
+
+    return target_date, limit, symbols
+
+def upload_to_gcs(bucket_name, source_file_path, destination_blob_name):
+    from google.cloud import storage
+
+    client = storage.Client()
+    blob = client.bucket(bucket_name).blob(destination_blob_name)
+    blob.upload_from_filename(source_file_path)
+    logging.info("Uploaded to gs://%s/%s", bucket_name, destination_blob_name)
+
+def main():
+    try:
+        target_date, limit, symbols = parse_runtime_args()
+    except ValueError:
+        logging.error("Date must use YYYYMMDD format, for example 20260717")
+        return 2
     data_dt = target_date.strftime('%Y%m%d')
+    bucket_name = os.getenv("STOCK_CRAWLER_BUCKET")
+    if bucket_name:
+        from google.cloud import firestore
+
+        fs_client = firestore.Client()
+    else:
+        fs_client = None
 
     # Setup local output directory
     project_root = os.path.abspath(os.path.dirname(__file__))
@@ -342,14 +367,14 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
     logging.info(f"Local CSV files will be saved to: {output_dir}")
 
-    # Retrieve symbols directly from the TPEX OHLC API source.
-    try:
-        symbols = load_traded_symbols(target_date)
-    except Exception as e:
-        logging.error(
-            f"Failed to fetch TPEX OHLC data for {data_dt}: {e}"
-        )
-        sys.exit(1)
+    if symbols is None:
+        try:
+            symbols = load_traded_symbols(target_date)
+        except Exception as e:
+            logging.error(f"Failed to fetch TPEX OHLC data for {data_dt}: {e}")
+            return 1
+    else:
+        logging.info("Received %s symbols from Cloud Run trigger: %s", len(symbols), symbols)
 
     total_symbols = len(symbols)
     logging.info(
@@ -377,6 +402,18 @@ def main():
     failure_count = 0
     try:
         for idx, symbol in enumerate(symbols, 1):
+            doc_ref = None
+            if fs_client:
+                try:
+                    doc_ref = fs_client.collection(f"tpex_crawl_status_{data_dt}").document(symbol)
+                    if not doc_ref.get().exists:
+                        logging.warning("Symbol %s not found in Firestore, skipping.", symbol)
+                        continue
+                except Exception as e:
+                    failure_count += 1
+                    logging.error("Failed to access Firestore for symbol %s: %s", symbol, e)
+                    continue
+
             output_path = os.path.join(output_dir, f"{symbol}.csv")
             if os.path.exists(output_path):
                 logging.info(f"[{idx}/{total_symbols}] Stock {symbol} CSV already exists, skipping.")
@@ -409,7 +446,20 @@ def main():
                     time.sleep(1)
 
             if success:
-                success_count += 1
+                try:
+                    if bucket_name:
+                        upload_to_gcs(
+                            bucket_name,
+                            output_path,
+                            f"bs_report/tpex/{data_dt}/{symbol}.csv",
+                        )
+                    if doc_ref:
+                        doc_ref.delete()
+                        logging.info("Deleted Firestore document for symbol: %s", symbol)
+                    success_count += 1
+                except Exception as e:
+                    failure_count += 1
+                    logging.error("Failed to finalize symbol %s: %s", symbol, e)
             else:
                 failure_count += 1
                 logging.error(
