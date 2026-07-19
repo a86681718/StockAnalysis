@@ -13,6 +13,7 @@ import socket
 import urllib.request
 import urllib.error
 import re
+from urllib.parse import unquote, urlparse
 from datetime import datetime
 from websocket import create_connection
 
@@ -69,7 +70,7 @@ def find_chrome_path():
     return None
 
 class Turnstile:
-    def __init__(self, port=9222, user_data_dir=None):
+    def __init__(self, port=9222, user_data_dir=None, proxy=""):
         self.port = port
         if user_data_dir is None:
             user_data_dir = os.path.join(tempfile.gettempdir(), "g4f_chrome_profile_light")
@@ -77,6 +78,44 @@ class Turnstile:
         self.process = None
         self.ws = None
         self.id_counter = 0
+        self.proxy = proxy
+        self.proxy_extension_dir = None
+
+    def configure_proxy(self):
+        if not self.proxy:
+            return None
+        parsed = urlparse(self.proxy)
+        if not parsed.hostname:
+            raise ValueError("Proxy must include a hostname")
+        proxy_server = f"{parsed.scheme}://{parsed.hostname}:{parsed.port or 80}"
+        if not parsed.username:
+            return proxy_server
+
+        self.proxy_extension_dir = tempfile.mkdtemp(prefix="tpex_proxy_auth_")
+        manifest = {
+            "manifest_version": 3,
+            "name": "TPEX Proxy Authentication",
+            "version": "1.0",
+            "permissions": ["webRequest", "webRequestAuthProvider"],
+            "host_permissions": ["<all_urls>"],
+            "background": {"service_worker": "background.js"},
+        }
+        credentials = {
+            "username": unquote(parsed.username),
+            "password": unquote(parsed.password or ""),
+        }
+        with open(os.path.join(self.proxy_extension_dir, "manifest.json"), "w", encoding="utf-8") as file:
+            json.dump(manifest, file)
+        with open(os.path.join(self.proxy_extension_dir, "background.js"), "w", encoding="utf-8") as file:
+            file.write(
+                "const credentials = " + json.dumps(credentials) + ";\n"
+                "chrome.webRequest.onAuthRequired.addListener(\n"
+                "  (_details, callback) => callback({authCredentials: credentials}),\n"
+                "  {urls: ['<all_urls>']},\n"
+                "  ['asyncBlocking']\n"
+                ");\n"
+            )
+        return proxy_server
 
     def start_chrome(self):
         chrome_path = find_chrome_path()
@@ -110,6 +149,14 @@ class Turnstile:
             "--disable-gpu",
             "--disable-dev-shm-usage"
         ]
+        proxy_server = self.configure_proxy()
+        if proxy_server:
+            cmd.append(f"--proxy-server={proxy_server}")
+            if self.proxy_extension_dir:
+                cmd.extend([
+                    f"--disable-extensions-except={self.proxy_extension_dir}",
+                    f"--load-extension={self.proxy_extension_dir}",
+                ])
 
         self.process = subprocess.Popen(
             cmd,
@@ -182,6 +229,9 @@ class Turnstile:
                 except Exception:
                     pass
             self.process = None
+        if self.proxy_extension_dir:
+            shutil.rmtree(self.proxy_extension_dir, ignore_errors=True)
+            self.proxy_extension_dir = None
 
 def find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -189,14 +239,19 @@ def find_free_port() -> int:
         return s.getsockname()[1]
 
 class BrowserManager:
-    def __init__(self):
+    def __init__(self, proxy=""):
         self.client = None
         self.port = find_free_port()
         self.user_data_dir = os.path.join(tempfile.gettempdir(), f"g4f_chrome_profile_light_{self.port}")
+        self.proxy = proxy
 
     def get_token(self, target_url):
         if not self.client:
-            self.client = Turnstile(port=self.port, user_data_dir=self.user_data_dir)
+            self.client = Turnstile(
+                port=self.port,
+                user_data_dir=self.user_data_dir,
+                proxy=self.proxy,
+            )
             self.client.start_chrome()
             logging.info(f"[BrowserManager] Initial load of {target_url}...")
             self.client.call_cdp("Page.navigate", url=target_url)
@@ -230,7 +285,7 @@ class BrowserManager:
             self.client.close()
             self.client = None
 
-def crawl_stock_data(stock, token, output_dir, data_date=None):
+def crawl_stock_data(stock, token, output_dir, data_date=None, proxy=""):
     """Crawl stock data from TPEX and return success plus a diagnostic reason."""
     url = "https://www.tpex.org.tw/www/zh-tw/afterTrading/brokerBS"
     headers = {
@@ -244,12 +299,24 @@ def crawl_stock_data(stock, token, output_dir, data_date=None):
         "code": stock
     }
     try:
-        response = requests.post(url, data=payload, headers=headers, timeout=15, verify=False)
+        response = requests.post(
+            url,
+            data=payload,
+            headers=headers,
+            proxies={"http": proxy, "https": proxy} if proxy else None,
+            timeout=30,
+            verify=False,
+        )
         response.raise_for_status()
         data = response.json()
         tables = data.get('tables')
         if not isinstance(tables, list) or len(tables) <= 1:
-            return False, f"invalid tables structure: table_count={len(tables) if isinstance(tables, list) else 'missing'}"
+            preview = response.text[:500].replace("\n", " ")
+            return False, (
+                f"invalid tables structure: table_count={len(tables) if isinstance(tables, list) else 'missing'}, "
+                f"status={response.status_code}, content_type={response.headers.get('content-type')}, "
+                f"body={preview!r}"
+            )
 
         table = tables[1]
         rows = table.get('data', [])
@@ -342,6 +409,11 @@ def upload_to_gcs(bucket_name, source_file_path, destination_blob_name):
     blob.upload_from_filename(source_file_path)
     logging.info("Uploaded to gs://%s/%s", bucket_name, destination_blob_name)
 
+def load_proxies():
+    raw = os.getenv("TPEX_PROXIES") or os.getenv("PROXY", "")
+    proxies = [line.strip() for line in raw.splitlines() if line.strip()]
+    return proxies or [""]
+
 def main():
     try:
         target_date, limit, symbols = parse_runtime_args()
@@ -405,6 +477,8 @@ def main():
         logging.info("No symbols to process.")
         return
 
+    proxies = load_proxies()
+    logging.info("Loaded %s proxy endpoint(s)", len([proxy for proxy in proxies if proxy]))
     browser = BrowserManager()
     target_url = "https://www.tpex.org.tw/zh-tw/mainboard/trading/info/brokerBS.html"
     success_count = 0
@@ -435,6 +509,15 @@ def main():
             last_reason = "unknown"
             while retries < 3 and not success:
                 retries += 1
+                proxy = proxies[(idx + retries - 2) % len(proxies)]
+                browser.close()
+                browser = BrowserManager(proxy=proxy)
+                logging.info(
+                    "Using proxy %s for symbol %s attempt %s/3",
+                    urlparse(proxy).hostname if proxy else "direct",
+                    symbol,
+                    retries,
+                )
                 token = browser.get_token(target_url)
                 if not token:
                     last_reason = "Turnstile token was empty"
@@ -445,7 +528,7 @@ def main():
                     continue
 
                 success, last_reason = crawl_stock_data(
-                    symbol, token, output_dir, data_date=target_date
+                    symbol, token, output_dir, data_date=target_date, proxy=proxy
                 )
                 if not success:
                     logging.warning(
