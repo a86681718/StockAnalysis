@@ -12,3 +12,4 @@ outputs/tmp/legacy_ipynb_checkpoints/Crawler_StockList-checkpoint.ipynb
 *.csv
 apps/etl/.ipynb_checkpoints/Untitled-checkpoint.ipynb
 .DS_Store
+/.gcloud/
