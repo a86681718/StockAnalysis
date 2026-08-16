@@ -29,7 +29,7 @@ RUN mkdir -p outputs/tmp/captcha
 RUN mkdir -p assets/models
 
 # Copy the rest of the application code
-COPY apps/twse/crawler-twse-bsreport-new.py /app/pyfiles/crawler-twse-bsreport.py
+COPY apps/twse/crawler-twse-bsreport.py /app/pyfiles/crawler-twse-bsreport.py
 COPY src/ /app/src/
 COPY conf/default.properties /app/conf/default.properties
 COPY assets/models/twse_cnn_model.hdf5 /app/assets/models/twse_cnn_model.hdf5

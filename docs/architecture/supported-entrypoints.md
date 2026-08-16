@@ -19,7 +19,7 @@ it does not make every observed behavior a permanent requirement.
 
 | Entrypoint | Classification | Command or runtime | Implementation owner | Inputs | Outputs | Evidence |
 |---|---|---|---|---|---|---|
-| TWSE broker crawler | production | Cloud Run Job `twse-crawler`; `python apps/twse/crawler-twse-bsreport-new.py ...` | `src/stockanalysis/runtime/crawlers/twse_bs_report.py` | symbol list, date, captcha model, Firestore/GCS configuration | broker CSV in GCS; Firestore crawl status | `apps/twse/Dockerfile`, active Job generation 7 |
+| TWSE broker crawler | production | Cloud Run Job `twse-crawler`; `python apps/twse/crawler-twse-bsreport.py ...` | `src/stockanalysis/runtime/crawlers/twse_bs_report.py` | symbol list, date, captcha model, Firestore/GCS configuration | broker CSV in GCS; Firestore crawl status | `apps/twse/Dockerfile`, active Job generation 7 |
 | TPEX broker crawler | production | Cloud Run Job `tpex-crawler`; `python apps/tpex/crawler-tpex-bsreport.py ...` | `src/stockanalysis/runtime/crawlers/tpex_local_runner.py` | symbol list, date, browser/proxy configuration | broker CSV in GCS; Firestore crawl status | `apps/tpex/Dockerfile`, active Job generation 13 |
 | TPEX local runner | production local operation | `docker build -f apps/tpex/Dockerfile.local-runner ...` | `src/stockanalysis/runtime/crawlers/tpex_local_runner.py` | symbols, `--date`, local proxy/browser configuration | local broker CSV | local-runner Dockerfile and entrypoint |
 | TWSE daily OHLC | production command | `python apps/twse/crawler-twse-daily-ohlc.py` | `src/stockanalysis/runtime/crawlers/twse_daily_ohlc.py` | trading date, TWSE endpoint | `data/ohlc/twse-YYYYMMDD.csv` | wrapper delegates to package module |
@@ -39,7 +39,7 @@ it does not make every observed behavior a permanent requirement.
 | Entrypoint group | Classification | Current evidence | Refactor treatment |
 |---|---|---|---|
 | `apps/tpex/debug_*`, debug image | diagnostic | coherent browser/Turnstile troubleshooting path | retain until operator confirms recovery need |
-| `src/stockanalysis/runtime/crawlers/test.py` | diagnostic | manually runnable token/proxy benchmark; not an automated test | rename only after Phase 1 |
+| `src/stockanalysis/runtime/crawlers/tpex_turnstile_smoke.py` | diagnostic | manually runnable token/proxy smoke using the canonical TPEX browser manager | retain as the token-only validation command |
 | `apps/analysis/Analysis_BsReport_v4.py` | research baseline | identified as current research baseline by `apps/analysis/README.md` | do not treat as production package logic |
 | other `apps/analysis/run_*`, `build_*`, versioned analyses | research or unknown | direct commands and script-to-script imports exist; no central scheduler | classify individually before moving/deleting |
 | older `apps/crawlers/` commands | unknown | plausible operator commands; current use is not centrally recorded | preserve until an operator/reference audit |

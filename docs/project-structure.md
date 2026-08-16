@@ -14,7 +14,9 @@ deployment/
 src/stockanalysis/runtime/
   crawlers/
     twse_bs_report.py
-    tpex_bs_report.py
+    tpex_local_runner.py
+    tpex_debug_browser.py
+    tpex_turnstile_smoke.py
     twse_daily_ohlc.py
     tpex_daily_ohlc.py
 

@@ -168,7 +168,7 @@ crawler -> raw csv / parquet -> ETL -> data/_derived -> analysis -> outputs / da
 
 如果只想快速上手，先看這些：
 
-- `apps/twse/crawler-twse-bsreport-new.py`
+- `apps/twse/crawler-twse-bsreport.py`
 - `apps/twse/crawler-twse-daily-ohlc.py`
 - `apps/tpex/crawler-tpex-bsreport.py`
 - `apps/tpex/crawler-tpex-daily-ohlc.py`

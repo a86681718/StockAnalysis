@@ -135,9 +135,10 @@ class Phase1RuntimeChainTests(unittest.TestCase):
 
     def test_twse_container_delegates_to_canonical_module(self):
         dockerfile = (ROOT / "apps/twse/Dockerfile").read_text()
-        wrapper = (ROOT / "apps/twse/crawler-twse-bsreport-new.py").read_text()
+        wrapper = (ROOT / "apps/twse/crawler-twse-bsreport.py").read_text()
 
-        self.assertIn("crawler-twse-bsreport-new.py", dockerfile)
+        self.assertIn("crawler-twse-bsreport.py", dockerfile)
+        self.assertNotIn("crawler-twse-bsreport-new.py", dockerfile)
         self.assertIn('ENTRYPOINT ["python", "pyfiles/crawler-twse-bsreport.py"]', dockerfile)
         self.assertIn("stockanalysis.runtime.crawlers.twse_bs_report", wrapper)
 
