@@ -1,0 +1,5 @@
+{
+  "ohlc_columns": ["symbol", "date", "open", "high", "low", "close", "volume", "market"],
+  "broker_report_columns": ["日期", "券商", "價格", "買進股數", "賣出股數"],
+  "required_artifacts": ["ohlc.parquet", "scored.parquet", "parquet_twse", "parquet_tpex"]
+}

@@ -1,0 +1,14 @@
+{
+  "as_of_date": "2026-08-15",
+  "artifacts": {
+    "episodes": "single_branch_persistent_accumulation/single_branch_persistent_episodes.parquet",
+    "daily_triggers": "single_branch_persistent_accumulation/single_branch_persistent_daily_triggers.parquet",
+    "general_cases": "general_broker_flow_anomaly/general_broker_flow_anomaly_review_cases.parquet",
+    "broker_branch_cases": "broker_branch_accumulation/",
+    "ohlc": "data/_derived/ohlc.parquet",
+    "broker_list": "data/broker_list.csv",
+    "company_profiles": ["data/reference/company_profiles_twse.json", "data/reference/company_profiles_tpex.json"],
+    "broker_dirs": ["data/bs_report/parquet_twse", "data/bs_report/parquet_tpex"]
+  },
+  "portal": "trigger_days_gt5_case_review/index.html"
+}

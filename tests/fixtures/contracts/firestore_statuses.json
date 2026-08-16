@@ -1,0 +1,6 @@
+{
+  "prepare": ["collection_created", "initialized", "pending"],
+  "trigger": ["running"],
+  "crawler_success_action": "delete_document",
+  "etl_manifest_terminal": ["success", "failed"]
+}
