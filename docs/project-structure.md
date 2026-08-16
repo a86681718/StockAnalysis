@@ -23,6 +23,10 @@ src/stockanalysis/runtime/
 src/stockanalysis/workflows/
   cloud_dispatch.py
 
+src/stockanalysis/pipelines/
+  broker_reports.py
+  ohlc.py
+
 apps/
   twse/
   tpex/
@@ -49,6 +53,8 @@ legacy/
   - actual crawler implementations used by local wrappers and containers
 - `src/stockanalysis/workflows/`
   - shared prepare/trigger orchestration; deployment wrappers provide market configuration and GCP clients
+- `src/stockanalysis/pipelines/`
+  - reusable broker-report and OHLC ETL implementations; `apps/etl/` retains runnable commands and compatibility imports
 - `apps/twse/` and `apps/tpex/`
   - thin runnable wrappers plus Docker and Cloud Build files
 - `apps/analysis/configs/`

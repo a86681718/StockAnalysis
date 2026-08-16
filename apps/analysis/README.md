@@ -63,3 +63,9 @@ Related parameter files are now under `configs/`:
 ## Why files were not moved
 
 Several scripts resolve config paths relative to `__file__`. To avoid breaking those jobs during the infrastructure cleanup, this directory is documented first and can be moved in a later pass with targeted script fixes.
+
+Phase 8 also found nine direct script-to-script imports in this directory,
+concentrated in the ML, strategy, Direction 3, key-broker, and warrant research
+commands. They remain research-level coupling rather than package APIs. No
+module under `src/stockanalysis/` imports `apps.analysis`; promote a calculation
+into the package only after its behavior and callers have dedicated tests.

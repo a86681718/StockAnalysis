@@ -43,8 +43,12 @@ data/bs_report/
   - manifest-based skip logic
   - archive processed folders
 - `bs_report_pipeline.py`
+  - compatibility imports for `stockanalysis.pipelines.broker_reports`
+- `src/stockanalysis/pipelines/broker_reports.py`
   - core ETL logic for per-day folder processing
   - incremental parquet writes with duplicate removal
+- `src/stockanalysis/pipelines/ohlc.py`
+  - reusable TWSE/TPEX OHLC normalization and combined-frame construction
 - `ETL_BsReport.py`
   - legacy tpex-focused ETL script kept for backward compatibility
 - `ETL_BsReportZip.py`
