@@ -45,19 +45,24 @@ class FakeFirestore:
 
 class FakeOperation:
     def __init__(self):
-        self.operation = mock.Mock(name="operations/test-operation")
+        self.operation = types.SimpleNamespace(name="operations/test-operation")
+        self.result_calls = 0
 
     def result(self):
-        return "completed"
+        self.result_calls += 1
+        raise AssertionError("asynchronous trigger must not wait for operation.result()")
 
 
 class FakeRunClient:
     def __init__(self):
         self.requests = []
+        self.operations = []
 
     def run_job(self, request):
         self.requests.append(request)
-        return FakeOperation()
+        operation = FakeOperation()
+        self.operations.append(operation)
+        return operation
 
 
 class FakeTasksClient:
@@ -186,6 +191,28 @@ class TriggerHandlerContractTests(unittest.TestCase):
         self.assertEqual(list(request.overrides.container_overrides[0].args), ["['2330', '2317']", "20260815"])
         collection = firestore.collections["twse_crawl_status_20260815"]
         self.assertEqual(collection.documents["2330"].updates, [{"status": "running"}])
+
+    def test_tpex_acknowledges_unresolved_operation_without_waiting(self):
+        module, _, run_client = self.load_trigger("tpex", ("6488",))
+
+        body, status = module.trigger_run_job(
+            FakeRequest({"symbols": ["6488"], "date": "20260815"})
+        )
+
+        self.assertEqual(status, 200)
+        self.assertIn("Operation ID: operations/test-operation", body)
+        self.assertEqual(run_client.operations[0].result_calls, 0)
+
+    def test_tpex_run_client_exception_returns_500(self):
+        module, _, run_client = self.load_trigger("tpex", ("6488",))
+        run_client.run_job = mock.Mock(side_effect=RuntimeError("run API unavailable"))
+
+        body, status = module.trigger_run_job(
+            FakeRequest({"symbols": ["6488"], "date": "20260815"})
+        )
+
+        self.assertEqual(status, 500)
+        self.assertIn("run API unavailable", body)
 
 
 class PrepareTaskContractTests(unittest.TestCase):

@@ -143,7 +143,7 @@ Cloud Scheduler prepare-tpex-crawler
 - The deployed image still runs `tpex_local_runner.py`; it is not the older `tpex_bs_report.py` or `tpex_bs_report_new.py` implementation.
 - Latest logs show fast successful token acquisition and uploads, then termination near symbol `2852/5426`. This is a throughput/timeout boundary, not a total inability to crawl.
 - Because completed symbols are deleted from Firestore, platform retries can make incremental progress. However, the runner still re-fetches and sorts the full traded universe, and the execution is reported failed when the timeout kills each attempt.
-- `deployment/trigger-tpex-job/main.py` waits on `response.result()`, while the deployed trigger service timeout is only 300 seconds and the job lasts much longer. The Cloud Task can therefore observe a trigger timeout even though the job continues; TWSE avoids this by returning the operation ID immediately.
+- Both trigger services acknowledge `run_job()` asynchronously with an operation ID. The HTTP response confirms Job start only; crawler completion remains observable through Firestore and Job logs.
 
 ## Workflow 3 — Local market-data refresh and ETL
 
@@ -293,7 +293,7 @@ python apps/visualization/app.py
 | `apps/twse/Dockerfile` and `apps/twse/crawler-twse-bsreport-new.py` | Build/entry chain for deployed TWSE job; behavior observed in logs. |
 | `src/stockanalysis/runtime/crawlers/twse_bs_report.py` | Observed log vocabulary, captcha behavior, GCS uploads, and Firestore deletion match current execution. |
 | `deployment/prepare-tpex-list/` | Current deployed service and enabled scheduler target. |
-| `deployment/trigger-tpex-job/` | Current deployed service; current synchronous wait behavior is part of the task path. |
+| `deployment/trigger-tpex-job/` | Current source returns the Job operation ID asynchronously; deployment requires an explicit rollout. |
 | `apps/tpex/Dockerfile`, `entrypoint.sh`, `crawler-tpex-bsreport.py` | Build/entry chain for deployed TPEX image. |
 | `src/stockanalysis/runtime/crawlers/tpex_local_runner.py` | Current deployed image runs this module; latest logs match its output paths and messages. Current checkout is newer than the deployed image. |
 | `src/stockanalysis/runtime/crawlers/{twse,tpex}_daily_ohlc.py` | Direct CLI wrappers plus active TPEX runner import; current OHLC artifacts exist. |

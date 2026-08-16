@@ -27,7 +27,7 @@ it does not make every observed behavior a permanent requirement.
 | TWSE prepare service | production | Cloud Run source service `deployment/prepare-twse-list` | `deployment/prepare-twse-list/main.py` | optional date and batch size | Firestore work state and Cloud Tasks | deployment source and bootstrap script |
 | TPEX prepare service | production | Cloud Run source service `deployment/prepare-tpex-list` | `deployment/prepare-tpex-list/main.py` | optional date and batch size | Firestore work state and Cloud Tasks | deployment source and bootstrap script |
 | TWSE trigger service | production | Cloud Run source service `deployment/trigger-twse-job` | `deployment/trigger-twse-job/main.py` | JSON `symbols` and `date` | Firestore `running`; Cloud Run Job operation | deployment source and bootstrap script |
-| TPEX trigger service | production | Cloud Run source service `deployment/trigger-tpex-job` | `deployment/trigger-tpex-job/main.py` | JSON `symbols` and `date` | Firestore `running`; synchronous Job operation result | deployment source and bootstrap script |
+| TPEX trigger service | production | Cloud Run source service `deployment/trigger-tpex-job` | `deployment/trigger-tpex-job/main.py` | JSON `symbols` and `date` | Firestore `running`; asynchronous Job operation ID | deployment source and bootstrap script |
 | Broker-report ETL | production local operation | `uv run apps/etl/run_bs_report_etl.py --market ...` | `apps/etl/bs_report_pipeline.py` | GCS/local dated CSV folders and manifest | per-symbol Parquet, manifest, archive | `apps/etl/README.md` |
 | OHLC ETL | production local operation | `uv run apps/etl/build_ohlc_parquet.py` | same file | TWSE/TPEX daily OHLC CSV | `data/_derived/ohlc.parquet` | current data layout and Dash consumer |
 | Broker accumulation refresh | production local operation | `uv run apps/analysis/refresh_broker_branch_accumulation.py` | broker Parquet and OHLC artifacts | analysis prerequisites and case-review portal | active report workflow documentation |
@@ -63,6 +63,10 @@ Cloud task payload parsing and Firestore status names are owned by
 `src/stockanalysis/contracts/crawl_jobs.py`. Source deployments must be staged
 with `scripts/stage_cloud_run_source.py` so each otherwise self-contained
 service archive includes that canonical dependency.
+
+The TPEX trigger acknowledges a successful `run_job()` call immediately with
+the operation ID. HTTP 200 means the Job was started, not that crawling
+completed; completion remains observable through Firestore and Job logs.
 
 ## Baseline findings and unknowns
 
