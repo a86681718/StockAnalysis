@@ -1,7 +1,8 @@
 REGION="${REGION:-asia-east1}"
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='get(projectNumber)')
+SERVICE_SOURCE=$(python3 ./scripts/stage_cloud_run_source.py prepare-tpex-list)
 gcloud run deploy prepare-tpex-list \
-  --source ./deployment/prepare-tpex-list \
+  --source "$SERVICE_SOURCE" \
   --region "${REGION}" \
   --memory 512Mi \
   --cpu 1 \

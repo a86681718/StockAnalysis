@@ -231,9 +231,18 @@ deploy_jobs() {
 }
 
 deploy_services() {
+  local prepare_twse_source
+  local prepare_tpex_source
+  local trigger_twse_source
+  local trigger_tpex_source
+  prepare_twse_source="$(python3 "${ROOT_DIR}/scripts/stage_cloud_run_source.py" prepare-twse-list)"
+  prepare_tpex_source="$(python3 "${ROOT_DIR}/scripts/stage_cloud_run_source.py" prepare-tpex-list)"
+  trigger_twse_source="$(python3 "${ROOT_DIR}/scripts/stage_cloud_run_source.py" trigger-twse-job)"
+  trigger_tpex_source="$(python3 "${ROOT_DIR}/scripts/stage_cloud_run_source.py" trigger-tpex-job)"
+
   log "Deploy Cloud Run service prepare-twse-list"
   gcloud run deploy prepare-twse-list \
-    --source "${ROOT_DIR}/deployment/prepare-twse-list" \
+    --source "${prepare_twse_source}" \
     --region "${REGION}" \
     --service-account "${RUNTIME_SERVICE_ACCOUNT}" \
     --cpu 2 \
@@ -249,7 +258,7 @@ deploy_services() {
 
   log "Deploy Cloud Run service prepare-tpex-list"
   gcloud run deploy prepare-tpex-list \
-    --source "${ROOT_DIR}/deployment/prepare-tpex-list" \
+    --source "${prepare_tpex_source}" \
     --region "${REGION}" \
     --service-account "${RUNTIME_SERVICE_ACCOUNT}" \
     --cpu 1 \
@@ -265,7 +274,7 @@ deploy_services() {
 
   log "Deploy Cloud Run service trigger-twse-job"
   gcloud run deploy trigger-twse-job \
-    --source "${ROOT_DIR}/deployment/trigger-twse-job" \
+    --source "${trigger_twse_source}" \
     --region "${REGION}" \
     --service-account "${RUNTIME_SERVICE_ACCOUNT}" \
     --cpu 1 \
@@ -281,7 +290,7 @@ deploy_services() {
 
   log "Deploy Cloud Run service trigger-tpex-job"
   gcloud run deploy trigger-tpex-job \
-    --source "${ROOT_DIR}/deployment/trigger-tpex-job" \
+    --source "${trigger_tpex_source}" \
     --region "${REGION}" \
     --service-account "${RUNTIME_SERVICE_ACCOUNT}" \
     --cpu 1 \

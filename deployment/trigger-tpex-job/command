@@ -1,6 +1,7 @@
 REGION="${REGION:-asia-east1}"
+SERVICE_SOURCE=$(python3 ./scripts/stage_cloud_run_source.py trigger-tpex-job)
 gcloud run deploy trigger-tpex-job \
-  --source ./deployment/trigger-tpex-job \
+  --source "$SERVICE_SOURCE" \
   --region "${REGION}" \
   --cpu 1 \
   --memory 512Mi \

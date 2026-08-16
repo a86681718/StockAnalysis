@@ -1,7 +1,8 @@
 REGION="${REGION:-asia-east1}"
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='get(projectNumber)')
+SERVICE_SOURCE=$(python3 ./scripts/stage_cloud_run_source.py prepare-twse-list)
 gcloud run deploy prepare-twse-list \
-  --source ./deployment/prepare-twse-list \
+  --source "$SERVICE_SOURCE" \
   --region "${REGION}" \
   --cpu 2 \
   --memory 8Gi \
