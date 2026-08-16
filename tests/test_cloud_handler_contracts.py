@@ -130,12 +130,14 @@ def load_deployment_module(relative_path, module_name, firestore_client, run_cli
     tasks_module.HttpMethod = types.SimpleNamespace(POST="POST")
     functions_framework_module = types.ModuleType("functions_framework")
     functions_framework_module.http = lambda function: function
+    pandas_module = types.ModuleType("pandas")
     fake_modules = {
         "functions_framework": functions_framework_module,
         "google.cloud.firestore": firestore_module,
         "google.cloud.run_v2": run_module,
         "google.cloud.run_v2.types": run_types_module,
         "google.cloud.tasks_v2": tasks_module,
+        "pandas": pandas_module,
     }
     with (
         mock.patch.dict(sys.modules, fake_modules),
@@ -192,6 +194,21 @@ class TriggerHandlerContractTests(unittest.TestCase):
         collection = firestore.collections["twse_crawl_status_20260815"]
         self.assertEqual(collection.documents["2330"].updates, [{"status": "running"}])
 
+    def test_each_market_targets_its_configured_job(self):
+        for market, symbol in (("twse", "2330"), ("tpex", "6488")):
+            with self.subTest(market=market):
+                module, _, run_client = self.load_trigger(market, (symbol,))
+
+                _, status = module.trigger_run_job(
+                    FakeRequest({"symbols": [symbol], "date": "20260815"})
+                )
+
+                self.assertEqual(status, 200)
+                self.assertEqual(
+                    run_client.requests[0].name,
+                    f"projects/test-project/locations/asia-east1/jobs/{market}-crawler",
+                )
+
     def test_tpex_acknowledges_unresolved_operation_without_waiting(self):
         module, _, run_client = self.load_trigger("tpex", ("6488",))
 
@@ -239,6 +256,36 @@ class PrepareTaskContractTests(unittest.TestCase):
                 "image_revision": "image-1",
             },
         )
+
+    def test_each_prepare_task_preserves_queue_oidc_deadline_and_delay(self):
+        for market, symbol in (("twse", "2330"), ("tpex", "6488")):
+            with self.subTest(market=market):
+                firestore = FakeFirestore()
+                tasks = FakeTasksClient()
+                module = load_deployment_module(
+                    f"deployment/prepare-{market}-list/main.py",
+                    f"phase7_prepare_{market}",
+                    firestore,
+                    tasks_client=tasks,
+                )
+                module.QUEUE_NAME = "crawl-queue"
+                module.FUNCTION_URL = "https://trigger.example.test"
+
+                module.create_task([symbol], "20260815")
+
+                parent, task = tasks.created[0]
+                self.assertEqual(
+                    parent,
+                    "projects/test-project/locations/asia-east1/queues/crawl-queue",
+                )
+                request = task["http_request"]
+                self.assertEqual(request["url"], "https://trigger.example.test")
+                self.assertEqual(
+                    request["oidc_token"]["service_account_email"],
+                    "cloud-run@test-project.iam.gserviceaccount.com",
+                )
+                self.assertEqual(task["dispatch_deadline"].seconds, 1800)
+                self.assertIn("schedule_time", task)
 
 
 if __name__ == "__main__":
