@@ -1,26 +1,32 @@
 """Minimal proxy and Turnstile smoke test for the TPEX broker page."""
 
 import logging
-import os
+from urllib.parse import urlparse
 
-from stockanalysis.runtime.crawlers.tpex_bs_report_new import (
-    get_turnstile_token_sync,
-    load_proxies,
-    proxy_label,
-)
+from stockanalysis.runtime.crawlers.tpex_local_runner import BrowserManager, load_proxies
 
 
 TARGET_URL = "https://www.tpex.org.tw/zh-tw/mainboard/trading/info/brokerBS.html"
 
 
+def proxy_label(proxy: str) -> str:
+    if not proxy:
+        return "direct"
+    parsed = urlparse(proxy)
+    return f"{parsed.hostname}:{parsed.port or 80}"
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    proxies = load_proxies()
-    proxy = proxies[0]
-    os.environ["PROXY"] = proxy
+    proxy = load_proxies()[0]
     logging.info("Testing TPEX Turnstile through proxy %s", proxy_label(proxy))
 
-    token = get_turnstile_token_sync(TARGET_URL, "proxy_smoke_test")
+    browser = BrowserManager(proxy=proxy)
+    try:
+        token = browser.get_token(TARGET_URL)
+    finally:
+        browser.close()
+
     if not token:
         logging.error("Proxy smoke test did not obtain a Turnstile token")
         return 1

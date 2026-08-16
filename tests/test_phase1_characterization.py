@@ -115,6 +115,16 @@ class Phase1EtlCharacterizationTests(unittest.TestCase):
 
 
 class Phase1RuntimeChainTests(unittest.TestCase):
+    def test_tpex_turnstile_smoke_uses_canonical_runner(self):
+        smoke = (
+            ROOT / "src/stockanalysis/runtime/crawlers/tpex_turnstile_smoke.py"
+        ).read_text()
+
+        self.assertIn("tpex_local_runner import BrowserManager, load_proxies", smoke)
+        self.assertFalse(
+            (ROOT / "src/stockanalysis/runtime/crawlers/tpex_bs_report_new.py").exists()
+        )
+
     def test_twse_container_delegates_to_canonical_module(self):
         dockerfile = (ROOT / "apps/twse/Dockerfile").read_text()
         wrapper = (ROOT / "apps/twse/crawler-twse-bsreport-new.py").read_text()
