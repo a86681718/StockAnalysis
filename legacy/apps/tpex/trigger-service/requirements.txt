@@ -1,4 +1,0 @@
-functions-framework
-google-cloud-firestore
-google-cloud-run==0.10.17
-flask

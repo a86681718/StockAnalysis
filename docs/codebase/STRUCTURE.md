@@ -7,13 +7,13 @@
 | Path | Purpose | Evidence |
 |------|---------|----------|
 | `src/stockanalysis/` | Reusable configuration, analysis modules, and crawler runtime implementations | `src/stockanalysis/config.py`, `src/stockanalysis/analysis/`, `src/stockanalysis/runtime/crawlers/` |
-| `apps/` | Runnable crawler wrappers, ETL jobs, analysis/report scripts, tools, services, and Dash UI | `apps/*`, `README.md` |
+| `apps/` | Runnable crawler wrappers, ETL jobs, analysis/report scripts, tools, and Dash UI | `apps/*`, `README.md` |
 | `deployment/` | Active GCP source deployments for prepare and trigger services | `deployment/*/main.py`, `scripts/deploy_gcp_environment.sh` |
 | `tests/` | `unittest` suites for analysis logic | `tests/test_*.py` |
 | `docs/` | Operator runbooks and project documentation | `docs/project-structure.md`, `docs/gcp-bootstrap.md`, `docs/data-refresh-runbook.md` |
 | `openspec/` | Specifications and change artifacts | `openspec/specs/`, `openspec/changes/` |
 | `notebooks/` | Exploratory research notebooks; not stable runtime entry points | `notebooks/`, `README.md` |
-| `legacy/` | Retained, non-primary service layouts | `legacy/README.md`, `legacy/apps/` |
+| `legacy/` | Historical removal note; deleted service sources remain recoverable from Git | `legacy/README.md` |
 | `data/` | Repo-local compatibility data root; may be redirected with environment variables | `src/stockanalysis/config.py`, `docs/project-structure.md` |
 | `outputs/` | Generated analysis, report, and temporary outputs; may be redirected | `src/stockanalysis/config.py`, `.gitignore` |
 | `assets/` and `conf/` | Captcha/model/static assets and legacy properties | `assets/models/`, `conf/default.properties` |
@@ -38,7 +38,7 @@
 | `apps/etl/` | Local data synchronization and transformation jobs | Cloud service provisioning |
 | `apps/analysis/` | Experiment orchestration, searches, backtests, and report builders | Claims of stable library API without tests/evidence |
 | `deployment/` | Deployable prepare/trigger service source | Research notebooks or local analysis output |
-| `legacy/` | Historical reference implementations | New active production entry points |
+| `legacy/` | Historical removal notes | Runtime implementations or new active entry points |
 | `data/`, `outputs/` | Input/intermediate and generated artifacts | Reusable Python source |
 
 These boundaries describe current documented and observed placement; “must not” entries are operational navigation rules, not proof of automated enforcement.

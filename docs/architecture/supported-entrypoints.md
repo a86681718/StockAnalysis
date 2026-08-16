@@ -43,7 +43,7 @@ it does not make every observed behavior a permanent requirement.
 | `apps/analysis/Analysis_BsReport_v4.py` | research baseline | identified as current research baseline by `apps/analysis/README.md` | do not treat as production package logic |
 | other `apps/analysis/run_*`, `build_*`, versioned analyses | research or unknown | direct commands and script-to-script imports exist; no central scheduler | classify individually before moving/deleting |
 | older `apps/crawlers/` commands | unknown | plausible operator commands; current use is not centrally recorded | preserve until an operator/reference audit |
-| `apps/services/` and `legacy/apps/` | unsupported candidates | active responsibility is owned by `deployment/` | deletion requires Phase 2 reference and external-use checks |
+| `apps/services/` and `legacy/apps/` | removed in Phase 2 | active GCP source archives and deployment commands use `deployment/`; removed sources remain recoverable from Git | do not restore duplicate runtime implementations |
 
 ## Deployment provenance
 

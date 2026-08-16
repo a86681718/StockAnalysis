@@ -28,10 +28,9 @@ StockAnalysis/
 │   ├── etl/                # ETL 腳本
 │   ├── analysis/           # 研究型分析與回測腳本
 │   ├── visualization/      # Dash app
-│   └── services/           # 其他本地輔助服務
 ├── deployment/             # 正式 Cloud Run 部署入口
 ├── docs/                   # 架構與維護文件
-├── legacy/                 # 已退出主流程但保留的舊服務/舊結構
+├── legacy/                 # 歷史移除說明；舊服務原始碼由 Git history 保存
 ├── data/                   # 相容性預設資料區，正式使用建議改由環境變數指到 repo 外
 ├── outputs/                # 相容性預設輸出區
 ├── notebooks/              # 探索式 notebook
@@ -135,9 +134,7 @@ Dash 視覺化入口。
 
 ### `legacy/`
 
-已不再是主流程入口、但暫時保留的舊服務結構。
-
-這一層的目的是把歷史殘留從主幹挪開，不讓正式結構繼續膨脹。
+已移除的舊服務說明。歷史實作由 Git history 保存，不再於工作樹保留重複副本。
 
 ### `notebooks/`
 
