@@ -9,6 +9,15 @@ import pandas as pd
 import logging
 import requests
 import urllib3
+from stockanalysis.contracts.crawl_jobs import (
+    PayloadValidationError,
+    STATUS_COLLECTION_CREATED,
+    STATUS_INITIALIZED,
+    STATUS_PENDING,
+    normalize_batch_size,
+    normalize_date,
+    parse_crawl_job_payload,
+)
 
 
 class TwseSecurityBlockError(RuntimeError):
@@ -145,10 +154,13 @@ def get_warrant_list(dt, retries=3, delay=2):
                 logging.error(f"All {retries} attempts to fetch warrant list failed.")
                 return []
 
-def create_task(symbols: list, dt: str):
+def create_task(symbols: list, dt: str, run_id: str | None = None, image_revision: str | None = None):
     parent = tasks_client.queue_path(PROJECT_ID, LOCATION, QUEUE_NAME)
     SERVICE_ACCOUNT = f"cloud-run@{PROJECT_ID}.iam.gserviceaccount.com"
-    payload = {"symbols": symbols, 'date': dt}
+    payload = parse_crawl_job_payload(
+        {"symbols": symbols, "date": dt, "run_id": run_id, "image_revision": image_revision},
+        max_symbols=len(symbols),
+    ).to_task_body()
     task = {
         "http_request": {
             "http_method": tasks_v2.HttpMethod.POST,
@@ -178,7 +190,7 @@ def create_collection_if_not_exists(collection_name):
         if not doc.exists:
             # 如果文件不存在，這意味著 collection 還沒創建
             doc_ref.set({
-                "status": "collection_created"
+                "status": STATUS_COLLECTION_CREATED
             })
             logging.info(f"Collection '{collection_name}' was not found, and has been created.")
         else:
@@ -196,13 +208,10 @@ def main(request: Request | None = None):
             data = request.get_json(silent=True) or {}
             logging.info(f'request.get_json(): {data}')
 
-        if data and "date" in data:
-            data_dt = data["date"]
-        else:
-            data_dt = datetime.now().strftime('%Y/%m/%d')
+        data_dt = normalize_date(data["date"]) if data and "date" in data else datetime.now().strftime('%Y/%m/%d')
         logging.info(f"Date of data: {data_dt}")
 
-        batch_size = data.get("batch_size", 3500) if data else 3500
+        batch_size = normalize_batch_size(data.get("batch_size") if data else None, default=3500, maximum=3500)
         logging.info(f"Batch size: {batch_size}")
 
         collection_name = "twse_crawl_status_" + data_dt.replace("/", "")
@@ -220,7 +229,7 @@ def main(request: Request | None = None):
             create_collection_if_not_exists(collection_name)
             for symbol in symbols:
                 doc_ref = client.collection(collection_name).document(symbol)
-                doc_ref.set({"status": "initialized", "updatedAt": firestore.SERVER_TIMESTAMP})
+                doc_ref.set({"status": STATUS_INITIALIZED, "updatedAt": firestore.SERVER_TIMESTAMP})
             logging.info(f"Initialized Firestore collection {collection_name} with {len(symbols)} symbols")
 
         total_symbols = len(symbols)
@@ -232,9 +241,9 @@ def main(request: Request | None = None):
 
             for symbol in batch:
                 doc_ref = client.collection(collection_name).document(symbol)
-                doc_ref.set({"status": "pending", "updatedAt": firestore.SERVER_TIMESTAMP})
+                doc_ref.set({"status": STATUS_PENDING, "updatedAt": firestore.SERVER_TIMESTAMP})
 
-            create_task(batch, data_dt)
+            create_task(batch, data_dt, data.get("run_id"), data.get("image_revision"))
             batches_created += 1
 
         response_payload = {
@@ -251,6 +260,10 @@ def main(request: Request | None = None):
 
         return jsonify(response_payload), 200
 
+    except PayloadValidationError as exc:
+        if request is None:
+            raise
+        return jsonify({"status": "error", "message": str(exc)}), 400
     except Exception as exc:
         logging.exception("Failed to prepare TWSE list")
         if request is None:

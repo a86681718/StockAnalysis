@@ -6,6 +6,7 @@ from google.cloud import firestore, run_v2
 from google.cloud.run_v2.types import RunJobRequest
 from datetime import datetime
 from flask import Request
+from stockanalysis.contracts.crawl_jobs import CrawlJobPayload, PayloadValidationError, STATUS_RUNNING, parse_crawl_job_payload
 
 def get_project_id():
     METADATA_URL = "http://metadata.google.internal/computeMetadata/v1/project/project-id"
@@ -17,6 +18,7 @@ def get_project_id():
 PROJECT_ID = get_project_id()
 LOCATION = os.getenv("LOCATION", "asia-east1")
 JOB_NAME = os.getenv("JOB_NAME", "tpex-crawler")
+MAX_BATCH_SIZE = int(os.getenv("MAX_BATCH_SIZE", "10"))
 
 firestore_client = firestore.Client()
 run_client = run_v2.JobsClient()
@@ -46,16 +48,17 @@ def trigger_run_job(request: Request):
             logging.warning("Malformed or missing JSON payload")
             return "Malformed JSON", 400
 
-        symbols = data.get("symbols")
-        dt = data.get("date")
-        if not symbols or not isinstance(symbols, list):
-            logging.warning("Missing or invalid symbols field in request")
-            return "Missing or invalid symbols", 400
+        try:
+            payload = parse_crawl_job_payload(data, max_symbols=MAX_BATCH_SIZE)
+        except PayloadValidationError as exc:
+            logging.warning("Invalid crawl job payload: %s", exc)
+            return str(exc), 400
 
+        symbols = list(payload.symbols)
+        dt = payload.compact_date
         logging.info(f"Received symbol: {symbols}")
         logging.info(f"date: {dt}")
         # Firestore 更新狀態為 running
-        dt = dt.replace("/", "")
         collection_name = f"tpex_crawl_status_{dt}"
         skip_symbols = []
         for symbol in symbols:
@@ -66,9 +69,12 @@ def trigger_run_job(request: Request):
                 skip_symbols.append(symbol)
                 continue
             else:
-                doc_ref.update({"status": "running"})
+                doc_ref.update({"status": STATUS_RUNNING})
                 logging.info(f"[{symbol}] Updated Firestore status to 'running'")
         symbols = [x for x in symbols if x not in skip_symbols]
+        if not symbols:
+            logging.warning("No runnable symbols remain for %s after Firestore filtering.", collection_name)
+            return f"No runnable symbols for {collection_name}", 200
 
         # 準備 Cloud Run Job 路徑
         parent = f"projects/{PROJECT_ID}/locations/{LOCATION}"
@@ -80,7 +86,14 @@ def trigger_run_job(request: Request):
             name=job_path,
             overrides=RunJobRequest.Overrides(
                 container_overrides=[
-                    RunJobRequest.Overrides.ContainerOverride(args=[str(symbols), dt.replace('_', '')])
+                    RunJobRequest.Overrides.ContainerOverride(
+                        args=CrawlJobPayload(
+                            symbols=tuple(symbols),
+                            date=payload.date,
+                            run_id=payload.run_id,
+                            image_revision=payload.image_revision,
+                        ).to_job_args()
+                    )
                 ]
             ),
         )

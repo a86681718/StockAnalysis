@@ -59,6 +59,11 @@ The active gcloud account was verified locally but is intentionally omitted
 from this tracked registry. Re-run the auth/project/region preflight before any
 deployment.
 
+Cloud task payload parsing and Firestore status names are owned by
+`src/stockanalysis/contracts/crawl_jobs.py`. Source deployments must be staged
+with `scripts/stage_cloud_run_source.py` so each otherwise self-contained
+service archive includes that canonical dependency.
+
 ## Baseline findings and unknowns
 
 - The existing analysis suite passes 27 tests at the recorded revision.

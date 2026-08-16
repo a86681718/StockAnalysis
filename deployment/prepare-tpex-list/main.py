@@ -8,6 +8,14 @@ from flask import Request
 import pandas as pd
 import logging
 import requests
+from stockanalysis.contracts.crawl_jobs import (
+    PayloadValidationError,
+    STATUS_COLLECTION_CREATED,
+    STATUS_PENDING,
+    normalize_batch_size,
+    normalize_date,
+    parse_crawl_job_payload,
+)
 
 def get_project_id():
     METADATA_URL = "http://metadata.google.internal/computeMetadata/v1/project/project-id"
@@ -91,10 +99,13 @@ def get_warrant_list(url, dt):
         return all_warrant_pdf['代號'].to_list()
     return []
 
-def create_task(symbols: list, dt: str):
+def create_task(symbols: list, dt: str, run_id: str | None = None, image_revision: str | None = None):
     parent = tasks_client.queue_path(PROJECT_ID, LOCATION, QUEUE_NAME)
     SERVICE_ACCOUNT = f"cloud-run@{PROJECT_ID}.iam.gserviceaccount.com"
-    payload = {"symbols": symbols, 'date': dt}
+    payload = parse_crawl_job_payload(
+        {"symbols": symbols, "date": dt, "run_id": run_id, "image_revision": image_revision},
+        max_symbols=len(symbols),
+    ).to_task_body()
     task = {
         "http_request": {
             "http_method": tasks_v2.HttpMethod.POST,
@@ -124,7 +135,7 @@ def create_collection_if_not_exists(collection_name):
         if not doc.exists:
             # 如果文件不存在，這意味著 collection 還沒創建
             doc_ref.set({
-                "status": "collection_created"
+                "status": STATUS_COLLECTION_CREATED
             })
             print(f"Collection '{collection_name}' was not found, and has been created.")
         else:
@@ -136,20 +147,23 @@ def main(request: Request):
     """
     Main function to handle the request and create tasks.
     """
+    data = {}
     data_dt = None
     try:
         data = request.get_json(silent=True) or {}
         logging.info(f'request.get_json(): {data}')
-        if data and "date" in data:
-            data_dt = data["date"]
-        else:
-            data_dt = datetime.now().strftime('%Y/%m/%d')
+        data_dt = normalize_date(data["date"]) if data and "date" in data else datetime.now().strftime('%Y/%m/%d')
+    except PayloadValidationError as exc:
+        return str(exc), 400
     except Exception:
         data_dt = datetime.now().strftime('%Y/%m/%d')
     logging.info(f"Date of data: {data_dt}")
 
     # Get the batch size from the request or use the default value
-    batch_size = data.get("batch_size", 5) if data else 5
+    try:
+        batch_size = normalize_batch_size(data.get("batch_size") if data else None, default=5, maximum=10)
+    except PayloadValidationError as exc:
+        return str(exc), 400
     logging.info(f"Batch size: {batch_size}")
 
     # Fetch stock and warrant lists
@@ -171,7 +185,7 @@ def main(request: Request):
         create_collection_if_not_exists(collection_name)
         for symbol in symbols:
             doc_ref = client.collection(collection_name).document(symbol)
-            doc_ref.set({"status": "pending", "updatedAt": firestore.SERVER_TIMESTAMP})
+            doc_ref.set({"status": STATUS_PENDING, "updatedAt": firestore.SERVER_TIMESTAMP})
         logging.info(f"Initialized Firestore collection {collection_name} with {len(symbols)} symbols")
 
     # Split symbols into batches and create tasks
@@ -182,10 +196,10 @@ def main(request: Request):
         # Update Firestore documents for the batch
         for symbol in batch:
             doc_ref = client.collection(collection_name).document(symbol)
-            doc_ref.set({"status": "pending", "updatedAt": firestore.SERVER_TIMESTAMP})
+            doc_ref.set({"status": STATUS_PENDING, "updatedAt": firestore.SERVER_TIMESTAMP})
 
         # Create Cloud Task for the batch
-        create_task(batch, data_dt)
+        create_task(batch, data_dt, data.get("run_id"), data.get("image_revision"))
 
     return "Tasks created"
 
