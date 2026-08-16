@@ -16,7 +16,7 @@ if str(_SRC_ROOT) not in sys.path:
 
 from stockanalysis.config import ensure_dir, resolve_data
 
-from bs_report_pipeline import BsReportEtl
+from bs_report_pipeline import BsReportEtl, FolderResult
 
 
 MARKETS = ("twse", "tpex")
@@ -164,7 +164,9 @@ def process_market(paths: MarketPaths, args: argparse.Namespace) -> dict[str, in
         return {
             "synced_folders": len(all_folders),
             "processed_folders": 0,
+            "expected_csv_files": 0,
             "processed_csv_files": 0,
+            "failed_csv_files": 0,
             "updated_parquet_files": 0,
             "failed_folders": 0,
             "skipped_folders": skipped,
@@ -174,24 +176,42 @@ def process_market(paths: MarketPaths, args: argparse.Namespace) -> dict[str, in
     stats, folder_results = etl.run(pending_folders)
 
     for folder in pending_folders:
-        result = folder_results.get(folder.name, {"ok": False, "csv_files": 0})
+        result = folder_results.get(
+            folder.name,
+            FolderResult(
+                ok=False,
+                expected_csv_files=0,
+                processed_csv_files=0,
+                updated_parquet_files=0,
+                folder_error="Missing ETL result",
+            ),
+        )
         now = datetime.now().astimezone().isoformat()
         manifest[folder.name] = {
             "market": paths.market,
             "source_name": folder.name,
             "source_type": "folder",
             "processed_at": now,
-            "status": "success" if result["ok"] else "failed",
-            "csv_files": result["csv_files"],
+            "status": "success" if result.ok else "failed",
+            "csv_files": result.processed_csv_files,
+            "expected_csv_files": result.expected_csv_files,
+            "processed_csv_files": result.processed_csv_files,
+            "failed_csv_files": result.failed_csv_files,
+            "failed_filenames": list(result.failed_filenames),
+            "error_summaries": result.error_summaries,
+            "folder_error": result.folder_error,
+            "updated_parquet_files": result.updated_parquet_files,
         }
-        if args.archive and result["ok"]:
+        if args.archive and result.ok:
             archive_folder(folder, paths.archive_dir, dry_run=False)
 
     save_manifest(paths.manifest_path, manifest, dry_run=False)
     return {
         "synced_folders": len(all_folders),
         "processed_folders": stats.processed_folders,
+        "expected_csv_files": stats.expected_csv_files,
         "processed_csv_files": stats.processed_csv_files,
+        "failed_csv_files": stats.failed_csv_files,
         "updated_parquet_files": stats.updated_parquet_files,
         "failed_folders": stats.failed_folders,
         "skipped_folders": skipped,
@@ -217,11 +237,13 @@ def main() -> int:
         print(f"- {market}")
         print(f"  synced folders: {summary['synced_folders']}")
         print(f"  processed folders: {summary['processed_folders']}")
+        print(f"  expected csv files: {summary['expected_csv_files']}")
         print(f"  processed csv files: {summary['processed_csv_files']}")
+        print(f"  failed csv files: {summary['failed_csv_files']}")
         print(f"  updated parquet files: {summary['updated_parquet_files']}")
         print(f"  failed folders: {summary['failed_folders']}")
         print(f"  skipped folders: {summary['skipped_folders']}")
-    return 0
+    return 1 if any(summary["failed_folders"] for summary in summaries.values()) else 0
 
 
 if __name__ == "__main__":

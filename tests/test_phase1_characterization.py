@@ -75,12 +75,14 @@ class Phase1EtlCharacterizationTests(unittest.TestCase):
                 stats, results = etl.run([day])
 
             self.assertEqual(stats.processed_folders, 1)
+            self.assertEqual(stats.expected_csv_files, 1)
             self.assertEqual(stats.processed_csv_files, 1)
-            self.assertEqual(results["20260815"], {"ok": True, "csv_files": 1})
+            self.assertTrue(results["20260815"].ok)
+            self.assertEqual(results["20260815"].processed_csv_files, 1)
+            self.assertEqual(results["20260815"].updated_parquet_files, 1)
             self.assertTrue((temp / "output/2330.parquet").exists())
 
-    def test_partial_csv_failure_is_currently_reported_as_folder_success(self):
-        """Characterize the Phase 3 correctness gap; do not treat it as desired behavior."""
+    def test_partial_csv_failure_marks_the_folder_failed(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             day = temp / "input" / "20260815"
@@ -90,9 +92,15 @@ class Phase1EtlCharacterizationTests(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 stats, results = etl.run([day])
 
-            self.assertEqual(stats.processed_folders, 1)
-            self.assertEqual(stats.failed_folders, 0)
-            self.assertEqual(results["20260815"], {"ok": True, "csv_files": 1})
+            result = results["20260815"]
+            self.assertEqual(stats.processed_folders, 0)
+            self.assertEqual(stats.failed_folders, 1)
+            self.assertEqual(stats.expected_csv_files, 2)
+            self.assertEqual(stats.processed_csv_files, 1)
+            self.assertEqual(stats.failed_csv_files, 1)
+            self.assertFalse(result.ok)
+            self.assertEqual(result.failed_filenames, ("broken.csv",))
+            self.assertIn("ParserError", result.error_summaries["broken.csv"])
             self.assertFalse((temp / "output/broken.parquet").exists())
 
     def test_ohlc_fixtures_produce_the_current_normalized_schema(self):

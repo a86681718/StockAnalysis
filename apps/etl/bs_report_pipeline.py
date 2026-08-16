@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import traceback
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 import threading
@@ -15,9 +14,26 @@ import tqdm
 @dataclass
 class ProcessStats:
     processed_folders: int = 0
+    expected_csv_files: int = 0
     processed_csv_files: int = 0
+    failed_csv_files: int = 0
     updated_parquet_files: int = 0
     failed_folders: int = 0
+
+
+@dataclass(frozen=True)
+class FolderResult:
+    ok: bool
+    expected_csv_files: int
+    processed_csv_files: int
+    updated_parquet_files: int
+    failed_filenames: tuple[str, ...] = ()
+    error_summaries: dict[str, str] = field(default_factory=dict)
+    folder_error: str | None = None
+
+    @property
+    def failed_csv_files(self) -> int:
+        return len(self.failed_filenames)
 
 
 class BsReportEtl:
@@ -31,10 +47,10 @@ class BsReportEtl:
         self._stats_lock = threading.Lock()
         self._updated_stocks: set[str] = set()
 
-    def run(self, folders: Iterable[Path]) -> tuple[ProcessStats, dict[str, dict[str, int | bool]]]:
+    def run(self, folders: Iterable[Path]) -> tuple[ProcessStats, dict[str, FolderResult]]:
         folder_list = sorted(folders)
         stats = ProcessStats()
-        folder_results: dict[str, dict[str, int | bool]] = {}
+        folder_results: dict[str, FolderResult] = {}
         if not folder_list:
             return stats, folder_results
 
@@ -48,27 +64,44 @@ class BsReportEtl:
 
         for folder, result in zip(folder_list, results):
             folder_results[folder.name] = result
-            if result["ok"]:
+            stats.expected_csv_files += result.expected_csv_files
+            stats.processed_csv_files += result.processed_csv_files
+            stats.failed_csv_files += result.failed_csv_files
+            if result.ok:
                 stats.processed_folders += 1
-                stats.processed_csv_files += result["csv_files"]
             else:
                 stats.failed_folders += 1
         stats.updated_parquet_files = len(self._updated_stocks)
         return stats, folder_results
 
-    def process_daily_folder(self, day_path: Path) -> dict[str, int | bool]:
+    def process_daily_folder(self, day_path: Path) -> FolderResult:
         try:
             date = pd.to_datetime(day_path.name, format="%Y%m%d", errors="raise")
         except ValueError:
             print(f"[WARN] skip non-date folder: {day_path}")
-            return {"ok": False, "csv_files": 0}
+            return FolderResult(
+                ok=False,
+                expected_csv_files=0,
+                processed_csv_files=0,
+                updated_parquet_files=0,
+                folder_error="Invalid date folder name; expected YYYYMMDD",
+            )
 
         csv_files = sorted(day_path.glob("*.csv"))
         if not csv_files:
             print(f"[WARN] no csv files found: {day_path}")
-            return {"ok": False, "csv_files": 0}
+            return FolderResult(
+                ok=False,
+                expected_csv_files=0,
+                processed_csv_files=0,
+                updated_parquet_files=0,
+                folder_error="No CSV files found",
+            )
 
         processed_count = 0
+        updated_stocks: set[str] = set()
+        failed_filenames: list[str] = []
+        error_summaries: dict[str, str] = {}
         for csv_path in csv_files:
             stock_id = csv_path.stem
             try:
@@ -79,10 +112,20 @@ class BsReportEtl:
                         df[col] = self.safe_convert_numeric(df[col]).astype("float64")
                 self.write_parquet_incremental(stock_id, df)
                 processed_count += 1
+                updated_stocks.add(stock_id)
             except Exception as exc:
                 print(f"[WARN] failed to read {csv_path}: {exc}")
-                traceback.print_exc()
-        return {"ok": True, "csv_files": processed_count}
+                failed_filenames.append(csv_path.name)
+                error_summaries[csv_path.name] = f"{type(exc).__name__}: {exc}"
+
+        return FolderResult(
+            ok=not failed_filenames and processed_count == len(csv_files),
+            expected_csv_files=len(csv_files),
+            processed_csv_files=processed_count,
+            updated_parquet_files=len(updated_stocks),
+            failed_filenames=tuple(failed_filenames),
+            error_summaries=error_summaries,
+        )
 
     def write_parquet_incremental(self, stock_id: str, df: pd.DataFrame) -> None:
         out_file = self.output_dir / f"{stock_id}.parquet"

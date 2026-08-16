@@ -14,6 +14,10 @@ uv run apps/etl/run_bs_report_etl.py --market all --sync
 
 When `--sync` is enabled, the script now reads the local manifest first, lists remote GCS date folders, and only copies folders that do not already have `status=success` in the manifest. It no longer performs a full recursive `rsync` of the market prefix.
 
+A dated folder is successful only when every expected CSV is processed. Partial
+failures remain in `inbox/`, are recorded in the manifest with failed filenames
+and error summaries, are not archived, and make the command exit non-zero.
+
 ## Bs-report pipeline layout
 
 The pipeline expects these directories under `data/bs_report/`:

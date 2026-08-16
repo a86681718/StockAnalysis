@@ -66,8 +66,8 @@ deployment.
 - The local `.venv` cannot import the TWSE broker crawler because TensorFlow is
   absent. `apps/twse/requirements.txt` declares TensorFlow for the image, so the
   local check is recorded as an environment gap rather than a crawler defect.
-- Current ETL behavior marks a dated folder successful when at least one CSV
-  fails but another CSV is processed. The Phase 1 test deliberately records
-  this behavior; Phase 3 owns the correction.
+- Phase 1 recorded that a dated ETL folder could be marked successful when one
+  CSV failed. Phase 3 corrected this: partial failures remain in `inbox`, are
+  recorded in the manifest, are not archived, and produce a non-zero exit.
 - The repository does not currently prove which older crawler and research
   commands are still invoked manually outside the repository.
