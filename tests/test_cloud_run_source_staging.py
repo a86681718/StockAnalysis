@@ -24,6 +24,7 @@ class CloudRunSourceStagingTests(unittest.TestCase):
                 self.assertTrue((destination / "requirements.txt").is_file())
                 self.assertTrue((destination / "project.toml").is_file())
                 self.assertTrue((destination / "stockanalysis/contracts/crawl_jobs.py").is_file())
+                self.assertTrue((destination / "stockanalysis/workflows/cloud_dispatch.py").is_file())
 
     def test_staged_contract_is_importable_without_repository_src_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -32,7 +33,13 @@ class CloudRunSourceStagingTests(unittest.TestCase):
             original_path = sys.path[:]
             previous_modules = {
                 name: sys.modules.pop(name, None)
-                for name in ("stockanalysis", "stockanalysis.contracts", "stockanalysis.contracts.crawl_jobs")
+                for name in (
+                    "stockanalysis",
+                    "stockanalysis.contracts",
+                    "stockanalysis.contracts.crawl_jobs",
+                    "stockanalysis.workflows",
+                    "stockanalysis.workflows.cloud_dispatch",
+                )
             }
             try:
                 repository_src = (ROOT / "src").resolve()
@@ -41,14 +48,24 @@ class CloudRunSourceStagingTests(unittest.TestCase):
                     *(entry for entry in original_path if entry and Path(entry).resolve() != repository_src),
                 ]
                 module = importlib.import_module("stockanalysis.contracts.crawl_jobs")
+                dispatch_module = importlib.import_module(
+                    "stockanalysis.workflows.cloud_dispatch"
+                )
                 payload = module.parse_crawl_job_payload(
                     {"symbols": ["2330"], "date": "20260815"},
                     max_symbols=1,
                 )
                 self.assertEqual(payload.compact_date, "20260815")
+                self.assertEqual(dispatch_module.TriggerConfig.__name__, "TriggerConfig")
             finally:
                 sys.path = original_path
-                for name in ("stockanalysis", "stockanalysis.contracts", "stockanalysis.contracts.crawl_jobs"):
+                for name in (
+                    "stockanalysis",
+                    "stockanalysis.contracts",
+                    "stockanalysis.contracts.crawl_jobs",
+                    "stockanalysis.workflows",
+                    "stockanalysis.workflows.cloud_dispatch",
+                ):
                     sys.modules.pop(name, None)
                 for name, module in previous_modules.items():
                     if module is not None:

@@ -23,7 +23,7 @@ def stage_service_source(service_name: str, destination: Path) -> Path:
         raise ValueError(f"Staging destination must be empty: {destination}")
 
     service_source = ROOT / "deployment" / service_name
-    contracts_source = ROOT / "src/stockanalysis/contracts"
+    package_source = ROOT / "src/stockanalysis"
     destination.mkdir(parents=True, exist_ok=True)
 
     for source in service_source.iterdir():
@@ -39,7 +39,8 @@ def stage_service_source(service_name: str, destination: Path) -> Path:
         '"""Minimal StockAnalysis package staged for Cloud Run source deploy."""\n',
         encoding="utf-8",
     )
-    shutil.copytree(contracts_source, package_root / "contracts")
+    shutil.copytree(package_source / "contracts", package_root / "contracts")
+    shutil.copytree(package_source / "workflows", package_root / "workflows")
     return destination
 
 

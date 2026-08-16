@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 import types
@@ -141,6 +142,7 @@ def load_deployment_module(relative_path, module_name, firestore_client, run_cli
     }
     with (
         mock.patch.dict(sys.modules, fake_modules),
+        mock.patch.dict(os.environ, {"GOOGLE_CLOUD_PROJECT": "test-project"}),
         mock.patch.object(google_cloud_module, "firestore", firestore_module, create=True),
         mock.patch.object(google_cloud_module, "run_v2", run_module, create=True),
         mock.patch.object(google_cloud_module, "tasks_v2", tasks_module, create=True),

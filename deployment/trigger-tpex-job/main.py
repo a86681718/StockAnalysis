@@ -1,111 +1,86 @@
-import os
-import requests
 import logging
+import os
+
 import functions_framework
+import requests
+from flask import Request
 from google.cloud import firestore, run_v2
 from google.cloud.run_v2.types import RunJobRequest
-from datetime import datetime
-from flask import Request
-from stockanalysis.contracts.crawl_jobs import CrawlJobPayload, PayloadValidationError, STATUS_RUNNING, parse_crawl_job_payload
 
-def get_project_id():
-    METADATA_URL = "http://metadata.google.internal/computeMetadata/v1/project/project-id"
-    headers = {"Metadata-Flavor": "Google"}
-    response = requests.get(METADATA_URL, headers=headers, timeout=2)
-    return response.text
+from stockanalysis.contracts.crawl_jobs import PayloadValidationError
+from stockanalysis.workflows.cloud_dispatch import TriggerConfig, trigger_crawl_job
 
-# 設定專案資訊
-PROJECT_ID = get_project_id()
+
 LOCATION = os.getenv("LOCATION", "asia-east1")
 JOB_NAME = os.getenv("JOB_NAME", "tpex-crawler")
 MAX_BATCH_SIZE = int(os.getenv("MAX_BATCH_SIZE", "10"))
 
-firestore_client = firestore.Client()
-run_client = run_v2.JobsClient()
-symbol = None 
+_firestore_client = None
+_run_client = None
+_project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
 
-# Logging configuration
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+
+def get_project_id():
+    global _project_id
+    if _project_id:
+        return _project_id
+    response = requests.get(
+        "http://metadata.google.internal/computeMetadata/v1/project/project-id",
+        headers={"Metadata-Flavor": "Google"},
+        timeout=2,
+    )
+    _project_id = response.text
+    return _project_id
+
+
+def get_clients():
+    global _firestore_client, _run_client
+    if _firestore_client is None:
+        _firestore_client = firestore.Client()
+    if _run_client is None:
+        _run_client = run_v2.JobsClient()
+    return _firestore_client, _run_client
+
 
 @functions_framework.http
 def trigger_run_job(request: Request):
+    if not request.is_json:
+        return "Invalid content type, expected application/json", 400
+    data = request.get_json(silent=True)
+    if not data:
+        return "Malformed JSON", 400
+
     try:
-        logging.debug("===== Trigger Run Job =====")
-        logging.debug(f"Timestamp: {datetime.utcnow().isoformat()} UTC")
-        logging.debug(f"Headers: {dict(request.headers)}")
-        logging.debug(f"Raw body: {request.get_data()}")
-        logging.debug(f"Content-Type: {request.content_type}")
-        logging.debug(f"is_json: {request.is_json}")
-
-        if not request.is_json:
-            logging.warning("Invalid content type, expected JSON")
-            return "Invalid content type, expected application/json", 400
-
-        data = request.get_json(silent=True)
-        logging.debug(f"Parsed JSON: {data}")
-
-        if not data:
-            logging.warning("Malformed or missing JSON payload")
-            return "Malformed JSON", 400
-
-        try:
-            payload = parse_crawl_job_payload(data, max_symbols=MAX_BATCH_SIZE)
-        except PayloadValidationError as exc:
-            logging.warning("Invalid crawl job payload: %s", exc)
-            return str(exc), 400
-
-        symbols = list(payload.symbols)
-        dt = payload.compact_date
-        logging.info(f"Received symbol: {symbols}")
-        logging.info(f"date: {dt}")
-        # Firestore 更新狀態為 running
-        collection_name = f"tpex_crawl_status_{dt}"
-        skip_symbols = []
-        for symbol in symbols:
-            doc_ref = firestore_client.collection(collection_name).document(symbol)
-            doc = doc_ref.get()
-            if not doc.exists:
-                logging.debug(f"Symbol {symbol} not found in Firestore, skipping.")
-                skip_symbols.append(symbol)
-                continue
-            else:
-                doc_ref.update({"status": STATUS_RUNNING})
-                logging.info(f"[{symbol}] Updated Firestore status to 'running'")
-        symbols = [x for x in symbols if x not in skip_symbols]
-        if not symbols:
-            logging.warning("No runnable symbols remain for %s after Firestore filtering.", collection_name)
-            return f"No runnable symbols for {collection_name}", 200
-
-        # 準備 Cloud Run Job 路徑
-        parent = f"projects/{PROJECT_ID}/locations/{LOCATION}"
-        job_path = f"{parent}/jobs/{JOB_NAME}"
-        logging.debug(f"[{symbols}] Prepared job path: {job_path}")
-
-        # 建立執行請求
-        run_request = RunJobRequest(
-            name=job_path,
-            overrides=RunJobRequest.Overrides(
-                container_overrides=[
-                    RunJobRequest.Overrides.ContainerOverride(
-                        args=CrawlJobPayload(
-                            symbols=tuple(symbols),
-                            date=payload.date,
-                            run_id=payload.run_id,
-                            image_revision=payload.image_revision,
-                        ).to_job_args()
-                    )
-                ]
+        firestore_client, run_client = get_clients()
+        result = trigger_crawl_job(
+            data,
+            config=TriggerConfig(
+                market="tpex",
+                project_id=get_project_id(),
+                location=LOCATION,
+                job_name=JOB_NAME,
+                max_batch_size=MAX_BATCH_SIZE,
             ),
+            firestore_client=firestore_client,
+            run_client=run_client,
+            run_job_request_type=RunJobRequest,
         )
-        logging.info(f"[{symbols}] Start to run job ")
-
-        # 執行 Job
-        operation = run_client.run_job(request=run_request)
-        job_id = operation.operation.name
-        logging.info(f"[{symbols}] Job triggered successfully. Operation: {job_id}")
-
-        return f"Job triggered for symbols: {symbols}. Operation ID: {job_id}", 200
-
-    except Exception as e:
-        logging.error(f"[{symbol}] Exception occurred: {str(e)}", exc_info=True)
-        return f"Error: {str(e)}", 500
+        if not result.symbols:
+            logging.warning(
+                "No runnable symbols remain for %s after Firestore filtering.",
+                result.collection_name,
+            )
+            return f"No runnable symbols for {result.collection_name}", 200
+        symbols = list(result.symbols)
+        return (
+            f"Job triggered for symbols: {symbols}. Operation ID: {result.operation_id}",
+            200,
+        )
+    except PayloadValidationError as exc:
+        logging.warning("Invalid crawl job payload: %s", exc)
+        return str(exc), 400
+    except Exception as exc:
+        logging.exception("Failed to trigger TPEX crawl job")
+        return f"Error: {exc}", 500
