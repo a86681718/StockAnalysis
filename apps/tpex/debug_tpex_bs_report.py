@@ -10,7 +10,7 @@ from pathlib import Path
 import requests
 from google.cloud import storage
 
-from stockanalysis.runtime.crawlers.tpex_bs_report import get_patched_browser
+from stockanalysis.runtime.crawlers.tpex_debug_browser import get_patched_browser
 
 
 BROKER_PAGE_URL = "https://www.tpex.org.tw/zh-tw/mainboard/trading/info/brokerBS.html"

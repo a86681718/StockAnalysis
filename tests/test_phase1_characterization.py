@@ -125,6 +125,14 @@ class Phase1RuntimeChainTests(unittest.TestCase):
             (ROOT / "src/stockanalysis/runtime/crawlers/tpex_bs_report_new.py").exists()
         )
 
+    def test_tpex_debug_runtime_uses_diagnostic_browser_module(self):
+        debug_runtime = (ROOT / "apps/tpex/debug_tpex_bs_report.py").read_text()
+
+        self.assertIn("tpex_debug_browser import get_patched_browser", debug_runtime)
+        self.assertFalse(
+            (ROOT / "src/stockanalysis/runtime/crawlers/tpex_bs_report.py").exists()
+        )
+
     def test_twse_container_delegates_to_canonical_module(self):
         dockerfile = (ROOT / "apps/twse/Dockerfile").read_text()
         wrapper = (ROOT / "apps/twse/crawler-twse-bsreport-new.py").read_text()
