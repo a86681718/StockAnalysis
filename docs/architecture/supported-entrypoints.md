@@ -62,7 +62,8 @@ deployment.
 Cloud task payload parsing and Firestore status names are owned by
 `src/stockanalysis/contracts/crawl_jobs.py`. Source deployments must be staged
 with `scripts/stage_cloud_run_source.py` so each otherwise self-contained
-service archive includes that canonical dependency.
+service archive includes the canonical contracts and
+`src/stockanalysis/workflows/cloud_dispatch.py` orchestration.
 
 The TPEX trigger acknowledges a successful `run_job()` call immediately with
 the operation ID. HTTP 200 means the Job was started, not that crawling

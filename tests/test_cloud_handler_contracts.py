@@ -16,9 +16,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FakeDocument:
-    def __init__(self, exists: bool):
+    def __init__(self, exists: bool, document_id: str):
         self.exists = exists
+        self.id = document_id
         self.updates: list[dict[str, object]] = []
+        self.sets: list[dict[str, object]] = []
 
     def get(self):
         return self
@@ -26,13 +28,22 @@ class FakeDocument:
     def update(self, values):
         self.updates.append(values)
 
+    def set(self, values):
+        self.exists = True
+        self.sets.append(values)
+
 
 class FakeCollection:
     def __init__(self, existing_symbols=()):
-        self.documents = {symbol: FakeDocument(True) for symbol in existing_symbols}
+        self.documents = {
+            symbol: FakeDocument(True, symbol) for symbol in existing_symbols
+        }
 
     def document(self, symbol):
-        return self.documents.setdefault(symbol, FakeDocument(False))
+        return self.documents.setdefault(symbol, FakeDocument(False, symbol))
+
+    def stream(self):
+        return [document for document in self.documents.values() if document.exists]
 
 
 class FakeFirestore:
@@ -235,6 +246,24 @@ class TriggerHandlerContractTests(unittest.TestCase):
 
 
 class PrepareTaskContractTests(unittest.TestCase):
+    def test_twse_security_block_is_not_retried_as_normal_json(self):
+        module = load_deployment_module(
+            "deployment/prepare-twse-list/main.py",
+            "phase7_prepare_twse_security_block",
+            FakeFirestore(),
+            tasks_client=FakeTasksClient(),
+        )
+        response = mock.Mock()
+        response.content = "THE PAGE CANNOT BE ACCESSED".encode()
+        response.raise_for_status.return_value = None
+
+        with mock.patch.object(
+            module.requests, "get", return_value=response
+        ) as get_mock:
+            with self.assertRaises(module.TwseSecurityBlockError):
+                module.fetch_json("https://example.test", retries=3, delay=0)
+            self.assertEqual(get_mock.call_count, 1)
+
     def test_prepare_task_emits_canonical_body_with_optional_metadata(self):
         firestore = FakeFirestore()
         tasks = FakeTasksClient()
@@ -288,6 +317,51 @@ class PrepareTaskContractTests(unittest.TestCase):
                 )
                 self.assertEqual(task["dispatch_deadline"].seconds, 1800)
                 self.assertIn("schedule_time", task)
+
+    def test_tpex_prepare_batches_existing_symbols_in_order(self):
+        firestore = FakeFirestore(("6488", "70001", "70002"))
+        tasks = FakeTasksClient()
+        module = load_deployment_module(
+            "deployment/prepare-tpex-list/main.py",
+            "phase7_prepare_tpex_batches",
+            firestore,
+            tasks_client=tasks,
+        )
+        module.QUEUE_NAME = "crawl-queue"
+        module.FUNCTION_URL = "https://trigger.example.test"
+
+        response = module.main(
+            FakeRequest({"date": "20260815", "batch_size": 2})
+        )
+
+        self.assertEqual(response, "Tasks created")
+        bodies = [
+            json.loads(task["http_request"]["body"].decode())
+            for _, task in tasks.created
+        ]
+        self.assertEqual(
+            [body["symbols"] for body in bodies],
+            [["6488", "70001"], ["70002"]],
+        )
+
+    def test_twse_prepare_excludes_dummy_from_existing_collection(self):
+        firestore = FakeFirestore(("dummy", "2330"))
+        tasks = FakeTasksClient()
+        module = load_deployment_module(
+            "deployment/prepare-twse-list/main.py",
+            "phase7_prepare_twse_dummy",
+            firestore,
+            tasks_client=tasks,
+        )
+        module.QUEUE_NAME = "crawl-queue"
+        module.FUNCTION_URL = "https://trigger.example.test"
+
+        response = module.main()
+
+        self.assertEqual(response["total_symbols"], 1)
+        _, task = tasks.created[0]
+        body = json.loads(task["http_request"]["body"].decode())
+        self.assertEqual(body["symbols"], ["2330"])
 
 
 if __name__ == "__main__":

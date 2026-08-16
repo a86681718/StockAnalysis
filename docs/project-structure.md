@@ -20,6 +20,9 @@ src/stockanalysis/runtime/
     twse_daily_ohlc.py
     tpex_daily_ohlc.py
 
+src/stockanalysis/workflows/
+  cloud_dispatch.py
+
 apps/
   twse/
   tpex/
@@ -44,6 +47,8 @@ legacy/
   - stable deploy paths referenced by `commands`
 - `src/stockanalysis/runtime/crawlers/`
   - actual crawler implementations used by local wrappers and containers
+- `src/stockanalysis/workflows/`
+  - shared prepare/trigger orchestration; deployment wrappers provide market configuration and GCP clients
 - `apps/twse/` and `apps/tpex/`
   - thin runnable wrappers plus Docker and Cloud Build files
 - `apps/analysis/configs/`
