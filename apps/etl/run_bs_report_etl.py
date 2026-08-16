@@ -16,7 +16,7 @@ if str(_SRC_ROOT) not in sys.path:
 
 from stockanalysis.config import ensure_dir, resolve_data
 
-from bs_report_pipeline import BsReportEtl, FolderResult
+from stockanalysis.pipelines.broker_reports import BsReportEtl, FolderResult
 
 
 MARKETS = ("twse", "tpex")
